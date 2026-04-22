@@ -616,43 +616,48 @@ class MainWindow(QMainWindow):
         self.info_block = QWidget()
         info = QVBoxLayout(self.info_block)
         info.setContentsMargins(0, 0, 0, 0)
-        info.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        # Do not set AlignHCenter on the vbox: it shrinks each row to min width, which
+        # breaks word wrap and clips long titles. Labels span full width; text is H-centered.
+        _meta_w = QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         self.title_label = QLabel("No track")
         self.title_label.setWordWrap(True)
         self.title_label.setAlignment(_meta_align)
+        self.title_label.setSizePolicy(_meta_w[0], _meta_w[1])
         tfont = QFont()
         tfont.setPointSize(_s(20))
         tfont.setBold(True)
         self.title_label.setFont(tfont)
-        info.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        info.addWidget(self.title_label, 0)
         self.artist_label = QLabel("")
         self.artist_label.setWordWrap(True)
         self.artist_label.setAlignment(_meta_align)
+        self.artist_label.setSizePolicy(_meta_w[0], _meta_w[1])
         af = QFont()
         af.setPointSize(_s(15))
         self.artist_label.setFont(af)
         self.artist_label.setStyleSheet("color: #c4b59a;")
-        info.addWidget(self.artist_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        info.addWidget(self.artist_label, 0)
         self.album_label = QLabel("")
         self.album_label.setWordWrap(True)
         self.album_label.setAlignment(_meta_align)
+        self.album_label.setSizePolicy(_meta_w[0], _meta_w[1])
         bf = QFont()
         bf.setPointSize(_s(14))
         self.album_label.setFont(bf)
         self.album_label.setStyleSheet("color: #8a7a66;")
-        info.addWidget(self.album_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        info.addWidget(self.album_label, 0)
         self.sub_label = QLabel("")
         self.sub_label.setWordWrap(True)
         self.sub_label.setAlignment(_meta_align)
+        self.sub_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Maximum,
+        )
         sf = QFont()
         sf.setPointSize(_s(12))
         self.sub_label.setFont(sf)
         self.sub_label.setStyleSheet("color: #8a7a66;")
-        self.sub_label.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Maximum,
-        )
-        info.addWidget(self.sub_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        info.addWidget(self.sub_label, 0)
 
         self.info_block.setSizePolicy(
             QSizePolicy.Policy.Preferred,
