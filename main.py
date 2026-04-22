@@ -4,8 +4,9 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Layout: ``ui_layout.json``: ``w,h`` = size (one null ⇒ square, side from the other %); ``x,y`` =
-position (``null`` = center; < 0 = from right/bottom). See file ``description``.
+Layout: built-in v2 in ``ui_layout_config.UI_LAYOUT_V2_DOCUMENT``; override via
+``JUKEBOX_UI_LAYOUT`` JSON. ``w,h`` = size (one null ⇒ square, side from the other %); ``x,y`` =
+position (``null`` = center; < 0 = from right/bottom).
 
 Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
@@ -263,7 +264,7 @@ class AlbumArtLabel(QLabel):
 
 class ArtworkFrameHost(QWidget):
     """
-    Cover only; size/position from ui_layout.json. A centered min(w,h) square is used
+    Cover only; size/position from UI layout. A centered min(w,h) square is used
     for the pixmap so a non-square rect still shows correct aspect.
     """
 
@@ -726,7 +727,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         self._ui_elements = load_ui_layout()
-        # Percent-based rects (0–1) of the central widget; see ui_layout.json.
+        # Percent-based rects (0–1) of the central widget; see UI_LAYOUT_V2_DOCUMENT.
         self._ui_rect_map: dict[str, QWidget] = {}
 
         _meta_align = (
