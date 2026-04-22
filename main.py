@@ -706,7 +706,14 @@ class MainWindow(QMainWindow):
         self._art_frame = ArtworkFrameHost(self.album_art, self._art_over)
         self._art_frame.setObjectName("artFrame")
 
-        art_row = QHBoxLayout()
+        # Must use a row QWidget: a raw QHBoxLayout in QVBoxLayout can get a very short
+        # vertical cell while the art wants a large min width → wide thin strip (clipped art).
+        self._art_row_wrap = QWidget()
+        self._art_row_wrap.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        art_row = QHBoxLayout(self._art_row_wrap)
         art_row.setSpacing(0)
         art_row.setContentsMargins(0, 0, 0, 0)
         art_row.addStretch(1)
@@ -771,7 +778,7 @@ class MainWindow(QMainWindow):
         center = QVBoxLayout()
         self._center_vgap = _s(14)
         center.setSpacing(self._center_vgap)
-        center.addLayout(art_row, 1)
+        center.addWidget(self._art_row_wrap, 1)
         center.addWidget(self.info_block, 0)
         # QWidget wrapper so the hero row can shrink horizontally (layout min width
         # is not forced by one long sub_label line; right playlist column stays visible).
@@ -978,6 +985,10 @@ class MainWindow(QMainWindow):
         self.album_art.set_art_viewport(w, w)
         self._art_frame.setFixedSize(w, w)
         self._art_transport.setFixedSize(w, bar_h)
+        # Row must reserve exactly w px vertically so the center column does not
+        # collapse this cell to a short band (clipping the W×W frame to a strip).
+        if getattr(self, "_art_row_wrap", None) is not None:
+            self._art_row_wrap.setFixedHeight(w)
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
