@@ -62,6 +62,11 @@ _log = logging.getLogger("gls-frontend")
 # Global display scale: 3.0 = 300% of design-time base sizes (fonts, controls, spacing).
 UI_DISPLAY_SCALE = 3.0
 
+# Cover: size multiplier on the max square that still fits the layout (2.0 = +100% / double).
+ART_SIZE_MULT = 2.0
+# Hard cap in window pixels (must match AlbumArtLabel.set_square_size max).
+ART_SIDE_MAX = 2400
+
 
 def _s(n: float) -> int:
     """Scale a layout size (px, pt) by UI_DISPLAY_SCALE; minimum 1 pixel."""
@@ -200,7 +205,7 @@ class AlbumArtLabel(QLabel):
 
     def set_square_size(self, side: int) -> None:
         # Window-pixel bounds for cover (layout chrome already scales via UI_DISPLAY_SCALE)
-        side = max(160, min(1200, int(side)))
+        side = max(160, min(ART_SIDE_MAX, int(side)))
         if side == self._art_size:
             return
         self._art_size = side
@@ -609,7 +614,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._reflow_album_size)
 
     def _compute_album_side(self) -> int:
-        """Largest cover square that fits horizontally and in the main column above the progress bar."""
+        """Cover square size: max that fits, then ``ART_SIZE_MULT`` (+100% when 2.0) up to ``ART_SIDE_MAX``."""
         w = max(400, self.width())
         h = max(400, self.height())
         # Match _build_ui scaled margins, gaps, and transport column width (device pixels)
@@ -618,7 +623,7 @@ class MainWindow(QMainWindow):
         side_rails = self.vol_rail.width() + self.mode_rail.width()
         navcol = _btn(96)
         max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
-        # root: main_hero, spacing, prog, spacing, sep(1), spacing, hint
+        # root: main_hero, spacing, progress row, spacings, sep(1)
         sp = _s(18)
         below_main = sp + _s(36) + sp + 1 + sp + _s(20)
         main_hero_h = h - root_m - below_main
@@ -628,8 +633,9 @@ class MainWindow(QMainWindow):
             info_h = max(100, int(self.info_block.sizeHint().height()))
         art_max_h = main_hero_h - self._center_vgap - info_h
         art_max_h = max(100, art_max_h)
-        side = int(min(max_w, art_max_h))
-        return max(200, min(side, 1200))
+        fit = int(max(0, min(max_w, art_max_h)))
+        side = int(round(fit * ART_SIZE_MULT))
+        return max(200, min(side, ART_SIDE_MAX))
 
     def _reflow_album_size(self) -> None:
         self.album_art.set_square_size(self._compute_album_side())
