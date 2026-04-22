@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "w,h: 0-100% of width/height. x: >=0 = offset from left; <0 = |x|% from the right to this widget\u2019s right edge. y: >=0 = from top; <0 = |y|% from bottom to this widget\u2019s bottom. z: stack order (lower = back).",
+  "description": "w,h: 0-100% of width/height. x: null = horizontal center; >=0 = from left; <0 = |x|% from right. y: null = vertical center; >=0 = from top; <0 = |y|% from bottom. z: stack order (lower = back). Keys x,y must be present (use null to center).",
   "elements": {
     "artwork": {
       "x": 32,

@@ -4,8 +4,8 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path): ``w,h`` are size as %; ``x,y`` are
-position (``x,y`` < 0 = inset from the right / bottom; see file ``description``).
+Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path): ``w,h`` = size; ``x,y`` = position
+(``null`` = center on that axis; < 0 = from right/bottom; see file ``description``).
 
 Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
@@ -893,18 +893,26 @@ class MainWindow(QMainWindow):
     def _layout_rect_from_fracs(
         r: dict[str, Any], W: int, H: int
     ) -> tuple[int, int, int, int]:
-        """Fracs: w,h>0. x>=0 = from left, y>=0 = from top; x<0 = |x| from right; y<0 = |y| from bottom."""
+        """Fracs: w,h>0. x/y None = center on that axis; else as ui_layout (L/T or R/B for negative)."""
         wf = float(r["w"])
         hf = float(r["h"])
-        xf = float(r["x"])
-        yf = float(r["y"])
+        xf = r.get("x")
+        yf = r.get("y")
+        if xf is not None:
+            xf = float(xf)
+        if yf is not None:
+            yf = float(yf)
         ww = max(1, int(wf * W))
         hh = max(1, int(hf * H))
-        if xf >= 0.0:
+        if xf is None:
+            x_px = int((W - ww) // 2)
+        elif xf >= 0.0:
             x_px = int(xf * W)
         else:
             x_px = int(W * (1.0 - wf - abs(xf)))
-        if yf >= 0.0:
+        if yf is None:
+            y_px = int((H - hh) // 2)
+        elif yf >= 0.0:
             y_px = int(yf * H)
         else:
             y_px = int(H * (1.0 - hf - abs(yf)))

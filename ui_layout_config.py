@@ -2,8 +2,9 @@
 Load UI layout for MainWindow. On disk (v2) ``w,h`` and positive ``x,y`` are **whole
 percent 0–100** of the central (rounded). **Negative** ``x`` or ``y`` is the distance
 from the right or bottom edge to the widget’s right or bottom, as a **positive** percent
-(value stored negative in the file, e.g. ``-5`` = 5% from the edge). In memory,
-``load_ui_layout()`` feeds fractions to the window. Version 1 uses 0–1 floats (same sign rule).
+(value stored negative in the file, e.g. ``-5`` = 5% from the edge). **null** on ``x`` or
+``y`` means center on that axis. In memory, ``load_ui_layout()`` feeds fractions to the window;
+``None`` is allowed for an axis. Version 1 uses 0–1 floats (same rules).
 """
 from __future__ import annotations
 
@@ -50,12 +51,14 @@ def _axis_frac_to_pct_int(v: float) -> int:
 
 def _elements_to_json_percent(
     el: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, int]]:
-    out: dict[str, dict[str, int]] = {}
+) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
     for k, r in el.items():
+        rx = r.get("x")
+        ry = r.get("y")
         out[k] = {
-            "x": _axis_frac_to_pct_int(r["x"]),
-            "y": _axis_frac_to_pct_int(r["y"]),
+            "x": None if rx is None else _axis_frac_to_pct_int(float(rx)),
+            "y": None if ry is None else _axis_frac_to_pct_int(float(ry)),
             "w": _frac_to_pct_int(r["w"]),
             "h": _frac_to_pct_int(r["h"]),
             "z": int(r["z"]),
@@ -63,20 +66,28 @@ def _elements_to_json_percent(
     return out
 
 
+def _parse_opt_axis(v: Any) -> Optional[float]:
+    if v is None:
+        return None
+    return float(v)
+
+
 def _rect_fits(
-    x: float, y: float, w: float, h: float, lim: float
+    x: Optional[float], y: Optional[float], w: float, h: float, lim: float
 ) -> bool:
-    """lim is 1.0 (frac) or 100.0 (percent). Negative x/y = inset from R/B: |x|+w <= lim, |y|+h <= lim."""
+    """lim is 1.0 (frac) or 100.0 (percent). None = center on that axis."""
     if w <= 0 or h <= 0 or w > lim or h > lim:
         return False
-    if x >= 0 and x + w > lim + 0.5:
-        return False
-    if x < 0 and w + abs(x) > lim + 0.5:
-        return False
-    if y >= 0 and y + h > lim + 0.5:
-        return False
-    if y < 0 and h + abs(y) > lim + 0.5:
-        return False
+    if x is not None:
+        if x >= 0 and x + w > lim + 0.5:
+            return False
+        if x < 0 and w + abs(x) > lim + 0.5:
+            return False
+    if y is not None:
+        if y >= 0 and y + h > lim + 0.5:
+            return False
+        if y < 0 and h + abs(y) > lim + 0.5:
+            return False
     return True
 
 
@@ -241,24 +252,34 @@ OPTIONAL_ELEMENT_KEYS: tuple[str, ...] = ("sub_label",)
 
 
 def _rect_ok_v1_fracs(r: dict[str, Any]) -> bool:
+    if not all(k in r for k in ("x", "y", "w", "h", "z")):
+        return False
     try:
-        x = float(r["x"])
-        y = float(r["y"])
         w = float(r["w"])
         h = float(r["h"])
-    except (KeyError, TypeError, ValueError):
+    except (TypeError, ValueError):
+        return False
+    try:
+        x = _parse_opt_axis(r["x"])
+        y = _parse_opt_axis(r["y"])
+    except (TypeError, ValueError):
         return False
     return _rect_fits(x, y, w, h, 1.0)
 
 
 def _rect_ok_v2_percent(r: dict[str, Any]) -> bool:
-    """0–100; negative x = offset from right, negative y = from bottom (same as v1 in percent)."""
+    """0–100; null x/y = center; negative = offset from R/B (same as v1 in percent space)."""
+    if not all(k in r for k in ("x", "y", "w", "h", "z")):
+        return False
     try:
-        x = float(r["x"])
-        y = float(r["y"])
         w = float(r["w"])
         h = float(r["h"])
-    except (KeyError, TypeError, ValueError):
+    except (TypeError, ValueError):
+        return False
+    try:
+        x = _parse_opt_axis(r["x"])
+        y = _parse_opt_axis(r["y"])
+    except (TypeError, ValueError):
         return False
     return _rect_fits(x, y, w, h, 100.0)
 
@@ -295,16 +316,20 @@ def merge_ui_elements(
             z_merged = z_prev
         if is_v2:
             out[k] = {
-                "x": float(v["x"]) / 100.0,
-                "y": float(v["y"]) / 100.0,
+                "x": None
+                if v["x"] is None
+                else float(v["x"]) / 100.0,
+                "y": None
+                if v["y"] is None
+                else float(v["y"]) / 100.0,
                 "w": float(v["w"]) / 100.0,
                 "h": float(v["h"]) / 100.0,
                 "z": z_merged,
             }
         else:
             out[k] = {
-                "x": float(v["x"]),
-                "y": float(v["y"]),
+                "x": None if v["x"] is None else float(v["x"]),
+                "y": None if v["y"] is None else float(v["y"]),
                 "w": float(v["w"]),
                 "h": float(v["h"]),
                 "z": z_merged,
@@ -325,9 +350,9 @@ def default_json_document() -> dict[str, Any]:
         "version": 2,
         "description": (
             "w,h: 0-100% of width/height. "
-            "x: >=0 = offset from left; <0 = |x|% from the right to this widget’s right edge. "
-            "y: >=0 = from top; <0 = |y|% from bottom to this widget’s bottom. "
-            "z: stack order (lower = back)."
+            "x: null = horizontal center; >=0 = from left; <0 = |x|% from right. "
+            "y: null = vertical center; >=0 = from top; <0 = |y|% from bottom. "
+            "z: stack order (lower = back). Keys x,y must be present (use null to center)."
         ),
         "elements": pct,
     }
