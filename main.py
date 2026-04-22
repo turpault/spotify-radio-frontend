@@ -4,6 +4,10 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE, e.g.:
   GOLIBRESPOT_BASE=http://127.0.0.1:3678
+
+Playlists (not every status poll): GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS (default 5000),
+GOLIBRESPOT_PLAYLIST_INTERVAL_MS (default 300000 = 5 min), GOLIBRESPOT_STATE_PATH
+for go-librespot state.json — refetch when that file's mtime/size changes.
 """
 
 from __future__ import annotations
@@ -13,13 +17,13 @@ import logging
 import os
 import sys
 import threading
-import time
 from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
 from PyQt6.QtCore import (
     QAbstractAnimation,
+    QFileSystemWatcher,
     QPropertyAnimation,
     QSize,
     Qt,
@@ -83,6 +87,30 @@ def _btn(n: float) -> int:
 
 
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
+
+
+def _default_go_librespot_state_path() -> Path:
+    """Path to go-librespot `state.json` (credentials / session on disk)."""
+    override = (os.environ.get("GOLIBRESPOT_STATE_PATH") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return (
+            Path.home()
+            / "Library"
+            / "Application Support"
+            / "go-librespot"
+            / "state.json"
+        )
+    return Path.home() / ".config" / "go-librespot" / "state.json"
+
+
+def _state_file_fingerprint(path: Path) -> Optional[str]:
+    try:
+        st = path.stat()
+        return f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        return None
 
 
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
@@ -380,9 +408,25 @@ class MainWindow(QMainWindow):
         self._hud_hide_timer.setInterval(1800)
         self._hud_hide_timer.timeout.connect(self._begin_hud_fade)
         self._hud_fade: Optional[QPropertyAnimation] = None
-        # refresh Spotify playlist names (via daemon /web-api) at most this often
-        self._playlists_min_interval_s = 90.0
-        self._playlists_last_fetch: float = time.monotonic()
+        # Playlists: long interval + refetch when state.json fingerprint changes
+        self._state_path: Path = _default_go_librespot_state_path()
+        self._state_fp: Optional[str] = None
+        self._state_watcher: Optional[QFileSystemWatcher] = None
+        self._state_change_debounce = QTimer(self)
+        self._state_change_debounce.setSingleShot(True)
+        self._state_change_debounce.setInterval(500)
+        self._state_change_debounce.timeout.connect(self._on_state_file_debounced)
+        self._playlist_interval_ms = int(
+            os.environ.get("GOLIBRESPOT_PLAYLIST_INTERVAL_MS", str(5 * 60 * 1000))
+        )
+        self._playlist_first_delay_ms = int(
+            os.environ.get("GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS", "5000")
+        )
+        self._playlist_periodic = QTimer(self)
+        self._playlist_periodic.setInterval(
+            max(10_000, int(self._playlist_interval_ms))
+        )
+        self._playlist_periodic.timeout.connect(self._request_playlists_bg)
         # repeat: 0=off, 1=one track, 2=whole context
         self._repeat_mode: int = 0
         self._is_playing = False
@@ -400,10 +444,20 @@ class MainWindow(QMainWindow):
             "window init: GOLIBRESPOT_BASE=%s (override with env GOLIBRESPOT_BASE)",
             self._cfg.base,
         )
+        _log.info(
+            "playlists: state.json path %s; interval %s ms, first fetch in %s ms (env: "
+            "GOLIBRESPOT_STATE_PATH, GOLIBRESPOT_PLAYLIST_INTERVAL_MS, GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS)",
+            self._state_path,
+            self._playlist_interval_ms,
+            self._playlist_first_delay_ms,
+        )
         self._build_ui()
         self._wire_shortcuts()
         QTimer.singleShot(0, self._reflow_album_size)
-        QTimer.singleShot(400, self._request_playlists_bg)
+        self._install_state_file_watcher()
+        QTimer.singleShot(
+            self._playlist_first_delay_ms, self._start_playlist_periodic
+        )
 
         self._ws = QWebSocket()
         self._ws.connected.connect(self._on_ws_connected)
@@ -904,6 +958,51 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True, name="gls-status").start()
 
+    @pyqtSlot()
+    def _start_playlist_periodic(self) -> None:
+        """First playlist fetch after startup; then `self._playlist_periodic` (minutes)."""
+        _log.info("playlists: running scheduled fetch (startup delay elapsed)")
+        self._request_playlists_bg()
+        if not self._playlist_periodic.isActive():
+            self._playlist_periodic.start()
+
+    def _install_state_file_watcher(self) -> None:
+        p = self._state_path
+        if not p.is_file():
+            _log.info(
+                "playlists: state file not at %s — interval-only until file exists (see GOLIBRESPOT_STATE_PATH)",
+                p,
+            )
+            return
+        self._state_fp = _state_file_fingerprint(p)
+        self._state_watcher = QFileSystemWatcher(self)
+        if not self._state_watcher.addPath(str(p)):
+            _log.warning("playlists: failed to add watch for %s", p)
+            return
+        self._state_watcher.fileChanged.connect(self._on_state_file_changed)
+        _log.info(
+            "playlists: watching state.json at %s (fingerprint %s…)",
+            p,
+            (self._state_fp or "")[:32],
+        )
+
+    @pyqtSlot(str)
+    def _on_state_file_changed(self, path: str) -> None:
+        _log.debug("playlists: state file change signal: %s", path)
+        self._state_change_debounce.start()
+
+    @pyqtSlot()
+    def _on_state_file_debounced(self) -> None:
+        p = self._state_path
+        if not p.is_file():
+            return
+        fp = _state_file_fingerprint(p)
+        if fp is None or fp == self._state_fp:
+            return
+        _log.info("playlists: state.json mtime/size changed, refetching")
+        self._state_fp = fp
+        self._request_playlists_bg()
+
     def _request_playlists_bg(self) -> None:
         _log.debug("playlists: background fetch scheduled")
         def work() -> None:
@@ -986,11 +1085,6 @@ class MainWindow(QMainWindow):
 
         if not isinstance(st, dict):
             return
-
-        now = time.monotonic()
-        if now - self._playlists_last_fetch >= self._playlists_min_interval_s:
-            self._playlists_last_fetch = now
-            self._request_playlists_bg()
 
         self._set_shuffle_checked(bool(st.get("shuffle_context")))
         self._sync_repeat_mode(
@@ -1292,6 +1386,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._status_timer.stop()
         self._tick.stop()
+        self._playlist_periodic.stop()
+        self._state_change_debounce.stop()
+        if self._state_watcher is not None:
+            self._state_watcher.removePaths(self._state_watcher.files())
         self._hud_hide_timer.stop()
         if self._hud_fade is not None and self._hud_fade.state() == QAbstractAnimation.State.Running:
             self._hud_fade.stop()

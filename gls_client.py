@@ -17,6 +17,57 @@ from urllib.request import Request, urlopen
 
 _log = logging.getLogger("gls-client")
 
+# Cap error body dump in logs (bytes); still log total size if larger.
+_MAX_ERROR_BODY_LOG = 256 * 1024
+
+
+def _headers_as_lines(msg: object) -> str:
+    try:
+        if hasattr(msg, "as_string"):
+            return str(msg.as_string())  # type: ignore[misc]
+        it = getattr(msg, "items", None)
+        if callable(it):
+            return "\n".join(f"{k}: {v}" for k, v in it())  # type: ignore[misc]
+    except Exception:
+        pass
+    return repr(msg)
+
+
+def _log_http_error_response(
+    method: str, url: str, err: HTTPError, body: bytes
+) -> None:
+    """Log full response headers and body for failed HTTP responses (Spotify / proxy)."""
+    _log.warning(
+        "HTTP error: %s %s -> %s %s",
+        method,
+        url,
+        err.code,
+        getattr(err, "reason", "") or "",
+    )
+    h = err.headers
+    if h is not None:
+        _log.warning("Response headers:\n%s", _headers_as_lines(h).rstrip())
+    else:
+        _log.warning("Response headers: (none)")
+    n = len(body)
+    if n == 0:
+        _log.warning("Response body: (empty, 0 bytes)")
+        return
+    if n > _MAX_ERROR_BODY_LOG:
+        chunk = body[:_MAX_ERROR_BODY_LOG].decode("utf-8", errors="replace")
+        _log.warning(
+            "Response body: %d bytes (logging first %d only)\n%s",
+            n,
+            _MAX_ERROR_BODY_LOG,
+            chunk,
+        )
+    else:
+        _log.warning(
+            "Response body: %d bytes\n%s",
+            n,
+            body.decode("utf-8", errors="replace"),
+        )
+
 
 class GlsApiError(Exception):
     """Error from the go-librespot HTTP API."""
@@ -68,7 +119,9 @@ def _request(
         with urlopen(req, timeout=timeout) as resp:  # noqa: S310 — local trusted API
             return resp.getcode() or 0, resp.read()
     except HTTPError as e:
-        return e.code, (e.read() or b"")
+        raw = e.read() or b""
+        _log_http_error_response(method, url, e, raw)
+        return e.code, raw
     except URLError as e:
         raise GlsApiError(str(e)) from e
 
@@ -79,13 +132,6 @@ def get_json(path: str, cfg: Optional[GlsConfig] = None) -> Any:
     code, raw = _request("GET", url, body=None)
     if code != 200:
         text = raw.decode("utf-8", errors="replace")
-        _log.info(
-            "get_json: %s -> HTTP %d (body len=%d) %s",
-            path,
-            code,
-            len(text),
-            text[:200].replace("\n", " ") if text else "",
-        )
         raise GlsApiError(f"GET {path}: HTTP {code} {text[:500]}")
     if not raw:
         return None
