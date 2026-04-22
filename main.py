@@ -48,6 +48,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -62,8 +63,8 @@ _log = logging.getLogger("gls-frontend")
 # Global display scale: 3.0 = 300% of design-time base sizes (fonts, controls, spacing).
 UI_DISPLAY_SCALE = 3.0
 
-# Cover: size multiplier on the max square that still fits the layout (2.0 = +100% / double).
-ART_SIZE_MULT = 2.0
+# Cover: multiply min(width, height) fit (1.0 = fill). ih/metadata fix is the main size win.
+ART_SIZE_MULT = 1.0
 # Hard cap in window pixels (must match AlbumArtLabel.set_square_size max).
 ART_SIDE_MAX = 2400
 
@@ -521,7 +522,11 @@ class MainWindow(QMainWindow):
         self.sub_label.setFont(sf)
         self.sub_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.sub_label, 0, Qt.AlignmentFlag.AlignHCenter)
-        info.addStretch()
+
+        self.info_block.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
 
         center = QVBoxLayout()
         self._center_vgap = _s(14)
@@ -613,8 +618,24 @@ class MainWindow(QMainWindow):
         # After layout, info_block height reflects wrapped text for vertical budget.
         QTimer.singleShot(0, self._reflow_album_size)
 
+    def _info_area_height(self, main_hero_h: int) -> int:
+        """
+        Height reserved for title/artist/album row — only text + spacing, not filler stretch
+        (which made info_block report the whole column and starved the cover).
+        """
+        self.info_block.updateGeometry()
+        w = int(self.info_block.width())
+        if w < 8 and self.centralWidget() is not None:
+            w = max(200, int(self.centralWidget().width() * 0.35))
+        hint = int(self.info_block.sizeHint().height())
+        live = int(self.info_block.height())
+        raw = max(hint, live) if live > 2 else hint
+        # Do not let metadata take most of the column (stretches in old layout could do that).
+        cap = int(max(120, min(main_hero_h * 0.45, 720)))
+        return max(72, min(raw, cap))
+
     def _compute_album_side(self) -> int:
-        """Cover square size: max that fits, then ``ART_SIZE_MULT`` (+100% when 2.0) up to ``ART_SIDE_MAX``."""
+        """Largest square that fits: min(available width, art row height) × ART_SIZE_MULT, capped."""
         w = max(400, self.width())
         h = max(400, self.height())
         # Match _build_ui scaled margins, gaps, and transport column width (device pixels)
@@ -623,19 +644,17 @@ class MainWindow(QMainWindow):
         side_rails = self.vol_rail.width() + self.mode_rail.width()
         navcol = _btn(96)
         max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
-        # root: main_hero, spacing, progress row, spacings, sep(1)
+        # root: main_hero, spacing, progress bar row, spacings, 1px sep
         sp = _s(18)
-        below_main = sp + _s(36) + sp + 1 + sp + _s(20)
+        below_main = sp + _s(36) + sp + 1 + sp
         main_hero_h = h - root_m - below_main
-        # Prefer post-layout height so wrapped title affects reserved space; else size hint.
-        info_h = int(self.info_block.height())
-        if info_h < 12:
-            info_h = max(100, int(self.info_block.sizeHint().height()))
+        info_h = self._info_area_height(main_hero_h)
         art_max_h = main_hero_h - self._center_vgap - info_h
         art_max_h = max(100, art_max_h)
         fit = int(max(0, min(max_w, art_max_h)))
-        side = int(round(fit * ART_SIZE_MULT))
-        return max(200, min(side, ART_SIDE_MAX))
+        side = int(round(fit * float(ART_SIZE_MULT)))
+        side = min(side, int(max_w), int(art_max_h), ART_SIDE_MAX)
+        return max(120, side)
 
     def _reflow_album_size(self) -> None:
         self.album_art.set_square_size(self._compute_album_side())
