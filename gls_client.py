@@ -203,7 +203,14 @@ def parse_me_playlist_items(items: list[Any]) -> list[MePlaylist]:
 def get_me_playlists_gls_proxy(
     cfg: Optional[GlsConfig] = None, *, limit: int = 6, offset: int = 0
 ) -> list[MePlaylist]:
-    """Current user's playlists via go-librespot ``GET /web-api/v1/me/playlists`` (librespot session)."""
+    """
+    Playlists via the daemon's Web API pass-through: ``GET /web-api/<Spotify path>``.
+
+    This is **not** described in go-librespot's published `API.md` / `api-spec.yml` (they only
+    list first-party routes). The handler is in upstream ``cmd/daemon/api_server.go`` (prefix
+    ``/web-api/`` → Spotify Web API on the librespot session). Prefer :mod:`spotify_web_api` when
+    you have an OAuth access token (``spotify_web_api``); use this as fallback.
+    """
     c = cfg or GlsConfig.from_env()
     path = f"/web-api/v1/me/playlists?limit={int(limit)}&offset={int(offset)}"
     data = get_json(path, cfg=c)
