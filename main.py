@@ -141,7 +141,7 @@ class AlbumArtLabel(QLabel):
         self.setPixmap(scaled)
 
     def set_square_size(self, side: int) -> None:
-        side = max(160, min(900, int(side)))
+        side = max(160, min(1200, int(side)))
         if side == self._art_size:
             return
         self._art_size = side
@@ -387,7 +387,9 @@ class MainWindow(QMainWindow):
         _meta_align = (
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
         )
-        info = QVBoxLayout()
+        self.info_block = QWidget()
+        info = QVBoxLayout(self.info_block)
+        info.setContentsMargins(0, 0, 0, 0)
         info.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.title_label = QLabel("No track")
         self.title_label.setWordWrap(True)
@@ -417,9 +419,10 @@ class MainWindow(QMainWindow):
         info.addStretch()
 
         center = QVBoxLayout()
-        center.setSpacing(14)
+        self._center_vgap = 14
+        center.setSpacing(self._center_vgap)
         center.addLayout(art_row, 1)
-        center.addLayout(info)
+        center.addWidget(self.info_block, 0)
 
         self.shuffle_btn = QPushButton("\U0001f500")  # 🔀 shuffle
         self.shuffle_btn.setObjectName("IconTransport")
@@ -510,20 +513,33 @@ class MainWindow(QMainWindow):
         if self._volume_overlay is not None:
             self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
         self._reflow_album_size()
+        # After layout, info_block height reflects wrapped text for vertical budget.
+        QTimer.singleShot(0, self._reflow_album_size)
 
-    def _reflow_album_size(self) -> None:
+    def _compute_album_side(self) -> int:
+        """Largest cover square that fits horizontally and in the main column above the progress bar."""
         w = max(400, self.width())
         h = max(400, self.height())
-        # root margins + left/right side rails (volume, shuffle/repeat) + main_hero column gaps
         root_m = 24 * 2
         hero_gaps = 20 * 2
         side_rails = self.vol_rail.width() + self.mode_rail.width()
         navcol = 96
         max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
-        max_h = h - 260
-        side = int(min(max_w, max_h, 0.52 * h))
-        side = max(200, min(side, 920))
-        self.album_art.set_square_size(side)
+        # root: main_hero, spacing(18), prog, spacing(18), sep(1), spacing(18), hint
+        sp = 18
+        below_main = sp + 36 + sp + 1 + sp + 20
+        main_hero_h = h - root_m - below_main
+        # Prefer post-layout height so wrapped title affects reserved space; else size hint.
+        info_h = int(self.info_block.height())
+        if info_h < 12:
+            info_h = max(100, int(self.info_block.sizeHint().height()))
+        art_max_h = main_hero_h - self._center_vgap - info_h
+        art_max_h = max(100, art_max_h)
+        side = int(min(max_w, art_max_h))
+        return max(200, min(side, 1200))
+
+    def _reflow_album_size(self) -> None:
+        self.album_art.set_square_size(self._compute_album_side())
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
@@ -666,6 +682,7 @@ class MainWindow(QMainWindow):
         self._duration_ms = int(tr.get("duration", 0) or 0)
         self._position_ms = int(tr.get("position", 0) or 0)
         self._set_progress(self._position_ms, self._duration_ms)
+        QTimer.singleShot(0, self._reflow_album_size)
 
     def _clear_track(self) -> None:
         self.album_art.set_art_url(None)
@@ -677,6 +694,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.elapsed_label.setText("0:00")
         self.duration_label.setText("0:00")
+        QTimer.singleShot(0, self._reflow_album_size)
 
     def _set_progress(self, pos_ms: int, dur_ms: int) -> None:
         self._position_ms = max(0, pos_ms)
