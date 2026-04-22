@@ -100,6 +100,42 @@ class AlbumArtLabel(QLabel):
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._nam = QNetworkAccessManager(self)
         self._active_reply: Optional[QNetworkReply] = None
+        self._pause_visible = False
+        self._pause_overlay = QLabel(self)
+        self._pause_overlay.setObjectName("pauseOverlay")
+        self._pause_overlay.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._pause_overlay.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._pause_overlay.setText("\u23f8")  # ⏸
+        self._pause_overlay.setStyleSheet(
+            "background-color: rgba(8, 6, 4, 0.58); color: #f8f0e0;"
+        )
+        self._pause_overlay.hide()
+
+    def set_pause_overlay_visible(self, show: bool) -> None:
+        self._pause_visible = show
+        if show:
+            self._pause_overlay.show()
+            self._pause_overlay.raise_()
+        else:
+            self._pause_overlay.hide()
+        self._layout_pause_overlay()
+
+    def _layout_pause_overlay(self) -> None:
+        self._pause_overlay.setGeometry(0, 0, self.width(), self.height())
+        ps = max(14, int(self._art_size * 0.24))
+        f = self._pause_overlay.font()
+        f.setPointSize(ps)
+        f.setBold(True)
+        f.setStyleHint(QFont.StyleHint.SansSerif)
+        self._pause_overlay.setFont(f)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._layout_pause_overlay()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -171,6 +207,9 @@ class AlbumArtLabel(QLabel):
         self.setFixedSize(side, side)
         if self._raw_pix is not None and not self._raw_pix.isNull():
             self._redraw_from_raw()
+        self._layout_pause_overlay()
+        if self._pause_visible:
+            self._pause_overlay.raise_()
 
 
 class VolumeOverlay(QFrame):
@@ -276,6 +315,7 @@ class MainWindow(QMainWindow):
         # repeat: 0=off, 1=one track, 2=whole context
         self._repeat_mode: int = 0
         self._is_playing = False
+        self._is_paused = False
         self._duration_ms = 0
         self._position_ms = 0
         self._status_timer = QTimer(self)
@@ -633,11 +673,20 @@ class MainWindow(QMainWindow):
             self._apply_track(data)
         elif et == "playing":
             self._is_playing = True
+            self._is_paused = False
             if not self._tick.isActive():
                 self._tick.start()
-        elif et in ("paused", "not_playing", "inactive"):
+            self._sync_pause_overlay()
+        elif et == "paused":
             self._is_playing = False
+            self._is_paused = True
             self._tick.stop()
+            self._sync_pause_overlay()
+        elif et in ("not_playing", "inactive"):
+            self._is_playing = False
+            self._is_paused = False
+            self._tick.stop()
+            self._sync_pause_overlay()
         elif et == "seek" and isinstance(data, dict):
             pos = int(data.get("position", 0))
             dur = int(data.get("duration", 0) or self._duration_ms)
@@ -717,6 +766,7 @@ class MainWindow(QMainWindow):
             self.sub_label.setText("Buffering…")
         can_tick = not paused and not stop and not buf
         self._is_playing = can_tick
+        self._is_paused = bool(paused) and not bool(stop) and not bool(buf)
         if can_tick and not self._tick.isActive():
             self._tick.start()
         if not can_tick:
@@ -747,8 +797,10 @@ class MainWindow(QMainWindow):
         self._position_ms = int(tr.get("position", 0) or 0)
         self._set_progress(self._position_ms, self._duration_ms)
         QTimer.singleShot(0, self._reflow_album_size)
+        self._sync_pause_overlay()
 
     def _clear_track(self) -> None:
+        self._is_paused = False
         self.album_art.set_art_url(None)
         self.title_label.setText("No track")
         self.artist_label.setText("")
@@ -759,6 +811,11 @@ class MainWindow(QMainWindow):
         self.elapsed_label.setText("0:00")
         self.duration_label.setText("0:00")
         QTimer.singleShot(0, self._reflow_album_size)
+        self._sync_pause_overlay()
+
+    def _sync_pause_overlay(self) -> None:
+        has_track = self.title_label.text() not in ("", "No track")
+        self.album_art.set_pause_overlay_visible(self._is_paused and has_track)
 
     def _set_progress(self, pos_ms: int, dur_ms: int) -> None:
         self._position_ms = max(0, pos_ms)
