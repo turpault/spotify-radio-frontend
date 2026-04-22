@@ -7,12 +7,15 @@ Base URL: http://127.0.0.1:3678 by default; override with GOLIBRESPOT_BASE.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
+
+_log = logging.getLogger("gls-client")
 
 
 class GlsApiError(Exception):
@@ -79,7 +82,13 @@ def get_json(path: str, cfg: Optional[GlsConfig] = None) -> Any:
         raise GlsApiError(f"GET {path}: HTTP {code} {text[:500]}")
     if not raw:
         return None
-    return json.loads(raw.decode("utf-8"))
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        raise GlsApiError(
+            f"GET {path}: invalid JSON ({e!s}): {text[:300]!r}"
+        ) from e
 
 
 def post_json(
@@ -114,10 +123,19 @@ def get_me_playlists(
     c = cfg or GlsConfig.from_env()
     path = f"/web-api/v1/me/playlists?limit={int(limit)}&offset={int(offset)}"
     data = get_json(path, cfg=c)
-    if not isinstance(data, dict):
+    if data is None:
+        _log.warning("me/playlists: empty body")
         return []
-    items = data.get("items")
+    if isinstance(data, list):
+        # Unusual but tolerate a bare list from a proxy
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("items")
+    else:
+        _log.warning("me/playlists: unexpected top-level type %s", type(data))
+        return []
     if not isinstance(items, list):
+        _log.warning("me/playlists: items not a list, keys=%s", list(data.keys()) if isinstance(data, dict) else None)
         return []
     out: list[MePlaylist] = []
     for it in items:
@@ -125,16 +143,19 @@ def get_me_playlists(
             continue
         name = it.get("name")
         name_s = str(name) if name is not None else "—"
-        uri = it.get("uri")
-        if not (isinstance(uri, str) and uri.strip()):
+        raw_uri = it.get("uri")
+        if raw_uri is not None and str(raw_uri).strip():
+            uri = str(raw_uri).strip()
+        else:
             pid = it.get("id")
-            if isinstance(pid, str) and pid.strip():
-                uri = f"spotify:playlist:{pid.strip()}"
+            if pid is not None and str(pid).strip():
+                uri = f"spotify:playlist:{str(pid).strip()}"
             else:
                 uri = ""
-        else:
-            uri = str(uri).strip()
         if not uri:
+            _log.debug("me/playlists: skip row without id/uri: %r", it)
             continue
         out.append(MePlaylist(name=name_s, uri=uri))
+    if not out and items:
+        _log.warning("me/playlists: %d item(s) but 0 parsable; sample keys: %s", len(items), list(items[0].keys()) if items and isinstance(items[0], dict) else None)
     return out

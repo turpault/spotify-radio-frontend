@@ -307,6 +307,65 @@ def _fg_post(path: str, body: Optional[dict[str, Any]], cfg: GlsConfig) -> None:
     post_json(path, body, cfg=cfg)
 
 
+class PlaylistTile(QWidget):
+    """List-music icon (tap) + separate caption; avoids QToolButton text-under-icon clipping on macOS."""
+
+    play_requested = pyqtSignal(str)
+
+    def __init__(self, tile_icon: QIcon, icon_px: int, col_w: int) -> None:
+        super().__init__()
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.setFixedWidth(int(col_w))
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(_s(4))
+        self._uri = ""
+        self._btn = QToolButton()
+        self._btn.setObjectName("PlaylistTile")
+        self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._btn.setIcon(tile_icon)
+        isz = max(1, int(icon_px))
+        self._btn.setIconSize(QSize(isz, isz))
+        self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn.clicked.connect(self._on_btn)
+        self._caption = QLabel("—")
+        self._caption.setObjectName("PlaylistTileCaption")
+        self._caption.setWordWrap(True)
+        self._caption.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
+        self._caption.setFixedWidth(max(40, int(col_w) - _s(8)))
+        v.addWidget(self._btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        v.addWidget(self._caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._apply_empty()
+
+    def _on_btn(self) -> None:
+        u = (self._uri or "").strip()
+        if u.startswith("spotify:"):
+            self.play_requested.emit(u)
+
+    def _apply_empty(self) -> None:
+        self._uri = ""
+        self._caption.setText("—")
+        self._caption.setToolTip("")
+        self._btn.setEnabled(False)
+
+    def set_playlist(self, pl: Optional[MePlaylist], tile_icon: QIcon) -> None:
+        if pl is not None and pl.uri:
+            self._uri = pl.uri
+            self._caption.setText((pl.name or "—").strip() or "—")
+            self._caption.setToolTip(pl.name)
+            self._btn.setIcon(tile_icon)
+            self._btn.setEnabled(True)
+        else:
+            self._apply_empty()
+            self._btn.setIcon(tile_icon)
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -423,12 +482,21 @@ class MainWindow(QMainWindow):
                 color: #d4c4a8;
                 border: {b(2)}px solid #6a5a40;
                 border-radius: {b(10)}px;
+                padding: {b(6)}px;
+                min-width: {b(72)}px;
+                min-height: {b(72)}px;
+                max-width: {b(86)}px;
+                max-height: {b(86)}px;
+            }}
+            QLabel#PlaylistTileCaption {{
+                color: #b8a890;
                 font-size: {b(14)}px;
                 font-weight: 600;
-                padding: {b(8)}px {b(4)}px;
-                min-width: {b(84)}px;
-                min-height: {b(96)}px;
-                max-width: {b(200)}px;
+                font-family: Palatino, Georgia, serif;
+            }}
+            QLabel#PlaylistBanner {{
+                color: #c08060;
+                font-size: {b(14)}px;
                 font-family: Palatino, Georgia, serif;
             }}
             QToolButton#PlaylistTile:hover:enabled {{
@@ -458,6 +526,14 @@ class MainWindow(QMainWindow):
         _m = _s(24)
         root.setContentsMargins(_m, _m, _m, _m)
         root.setSpacing(_s(18))
+        self._playlist_banner = QLabel("")
+        self._playlist_banner.setObjectName("PlaylistBanner")
+        self._playlist_banner.setVisible(False)
+        self._playlist_banner.setWordWrap(True)
+        self._playlist_banner.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
+        root.addWidget(self._playlist_banner)
 
         self.prev_btn = QPushButton("⏮")
         self.prev_btn.setFixedSize(_btn(88), _btn(88))
@@ -592,7 +668,7 @@ class MainWindow(QMainWindow):
         # Far left / far right: six playlist tiles (icon + name; Web API + POST /player/play).
         self._playlist_col_w = _s(220)
         self._playlist_tile_icon = self._load_playlist_tile_icon()
-        self._playlist_tiles: list[QToolButton] = []
+        self._playlist_tiles: list[PlaylistTile] = []
         self._playlist_left, tiles_l = self._make_playlist_column()
         self._playlist_right, tiles_r = self._make_playlist_column()
         self._playlist_tiles = tiles_l + tiles_r
@@ -648,41 +724,30 @@ class MainWindow(QMainWindow):
             return QIcon()
         return svg_colored_icon(path, "#c9a43a", _btn(40))
 
-    @staticmethod
-    def _ellip_playlist_caption(s: str, max_chars: int = 22) -> str:
-        t = (s or "").strip() or "—"
-        if len(t) <= max_chars:
-            return t
-        return t[: max_chars - 1] + "\u2026"
-
-    def _make_playlist_column(self) -> tuple[QWidget, list[QToolButton]]:
+    def _make_playlist_column(self) -> tuple[QWidget, list[PlaylistTile]]:
         w = QWidget()
         w.setFixedWidth(self._playlist_col_w)
         v = QVBoxLayout(w)
         v.setContentsMargins(0, _s(2), 0, 0)
         v.setSpacing(_s(8))
-        tiles: list[QToolButton] = []
+        tiles: list[PlaylistTile] = []
+        ipx = _btn(40)
         for _ in range(3):
-            btn = QToolButton()
-            btn.setObjectName("PlaylistTile")
-            btn.setToolButtonStyle(
-                Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+            t = PlaylistTile(
+                self._playlist_tile_icon,
+                ipx,
+                self._playlist_col_w,
             )
-            btn.setIcon(self._playlist_tile_icon)
-            btn.setIconSize(QSize(_btn(40), _btn(40)))
-            btn.setText("—")
-            btn.setProperty("glsPlaylistUri", "")
-            btn.setEnabled(False)
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setSizePolicy(
-                QSizePolicy.Policy.Preferred,
-                QSizePolicy.Policy.Fixed,
-            )
-            btn.clicked.connect(self._on_playlist_tile_clicked)
-            tiles.append(btn)
-            v.addWidget(btn, 0)
+            t.play_requested.connect(self._on_playlist_uri_play)
+            tiles.append(t)
+            v.addWidget(t, 0)
         v.addStretch(1)
         return w, tiles
+
+    def _set_playlist_banner(self, text: str) -> None:
+        t = (text or "").strip()
+        self._playlist_banner.setText(t)
+        self._playlist_banner.setVisible(bool(t))
 
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
@@ -840,7 +905,15 @@ class MainWindow(QMainWindow):
                 pls = get_me_playlists(self._cfg, limit=6)
             except GlsApiError as e:
                 _log.warning("playlists: %s", e)
-                QTimer.singleShot(0, partial(self._on_playlists_failed))
+                QTimer.singleShot(
+                    0, partial(self._on_playlists_failed, str(e))
+                )
+                return
+            except Exception as e:
+                _log.exception("playlists: unexpected error")
+                QTimer.singleShot(
+                    0, partial(self._on_playlists_failed, str(e))
+                )
                 return
             QTimer.singleShot(0, partial(self._on_playlists_ok, pls))
 
@@ -848,16 +921,19 @@ class MainWindow(QMainWindow):
             target=work, daemon=True, name="gls-playlists"
         ).start()
 
-    @pyqtSlot()
-    def _on_playlists_failed(self) -> None:
-        for btn in self._playlist_tiles:
-            btn.setProperty("glsPlaylistUri", "")
-            btn.setText("—")
-            btn.setToolTip("")
-            btn.setEnabled(False)
+    @pyqtSlot(str)
+    def _on_playlists_failed(self, err: str) -> None:
+        self._set_playlist_banner(
+            f"Playlists: {err[:400]}".strip()
+            if (err or "").strip()
+            else "Playlists: request failed (see log)."
+        )
+        for tile in self._playlist_tiles:
+            tile.set_playlist(None, self._playlist_tile_icon)
 
     @pyqtSlot(object)
     def _on_playlists_ok(self, pls: object) -> None:
+        self._set_playlist_banner("")
         rows: list[Optional[MePlaylist]] = []
         if isinstance(pls, list):
             for x in pls:
@@ -866,37 +942,22 @@ class MainWindow(QMainWindow):
         while len(rows) < 6:
             rows.append(None)
         rows = rows[:6]
-        for i, btn in enumerate(self._playlist_tiles):
+        n_ok = sum(1 for r in rows if r is not None and r.uri)
+        if n_ok == 0 and isinstance(pls, list) and len(pls) == 0:
+            self._set_playlist_banner(
+                "Playlists: none returned (is GET /web-api/v1/me/playlists allowed on this daemon?)"
+            )
+        for i, tile in enumerate(self._playlist_tiles):
             pl = rows[i]
-            if pl is not None and pl.uri:
-                btn.setProperty("glsPlaylistUri", pl.uri)
-                btn.setText(self._ellip_playlist_caption(pl.name))
-                btn.setToolTip(pl.name)
-                btn.setIcon(self._playlist_tile_icon)
-                btn.setEnabled(True)
-            else:
-                btn.setProperty("glsPlaylistUri", "")
-                btn.setText("—")
-                btn.setToolTip("")
-                btn.setIcon(self._playlist_tile_icon)
-                btn.setEnabled(False)
-            # refresh style after dynamic property
-            st = btn.style()
-            st.unpolish(btn)
-            st.polish(btn)
+            tile.set_playlist(pl, self._playlist_tile_icon)
 
-    @pyqtSlot()
-    def _on_playlist_tile_clicked(self) -> None:
-        btn = self.sender()
-        if not isinstance(btn, QToolButton):
+    @pyqtSlot(str)
+    def _on_playlist_uri_play(self, uri: str) -> None:
+        u = (uri or "").strip()
+        if not u.startswith("spotify:"):
             return
-        raw = btn.property("glsPlaylistUri")
-        uri = raw if isinstance(raw, str) else ""
-        uri = uri.strip()
-        if not uri.startswith("spotify:"):
-            return
-        _log.info("play playlist context %s", uri)
-        self._post_bg("/player/play", {"uri": uri, "paused": False})
+        _log.info("play playlist context %s", u)
+        self._post_bg("/player/play", {"uri": u, "paused": False})
 
     @pyqtSlot(str)
     def _on_status_failed(self, msg: str) -> None:
