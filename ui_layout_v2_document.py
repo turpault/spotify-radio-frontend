@@ -6,7 +6,9 @@ from typing import Any
 UI_LAYOUT_V2_DOCUMENT: dict[str, Any] = {
     "version": 2,
     "description": (
-        "w,h: 0-100% of width/height; null w xor null h = square, side = non-null% on that axis. "
+        "w,h: 0-100% of width and height. Exactly one of w or h may be null for a square: if w is null, "
+        "set h to the target percent of height (0-100) and the square side follows h; if h is null, "
+        "set w to the target percent of width (0-100) and the square side follows w; both null is invalid. "
         "x,y: null = center; <0 = from right/bottom. z: stack order. All keys x,y,w,h,z required."
     ),
     "elements": {
