@@ -4,10 +4,10 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Recent tracks: as playback changes, the UI records track metadata + context URI (from
-WebSocket events) and stores album art under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
-``~/.config/jukebox-frontend-go-librespot/``). The six side tiles show the last six tracks; tap
-to start that context/URI via the local player API (no Spotify Web / Connect REST client).
+The six side tiles show the last **six distinct playlist (context) URIs**; metadata and art
+are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
+``~/.config/jukebox-frontend-go-librespot/``). Tap a tile to start that URI via the local player
+API (no Spotify Web / Connect REST client).
 """
 
 from __future__ import annotations
@@ -70,8 +70,8 @@ _log = logging.getLogger("gls-frontend")
 # Global display scale: 3.0 = 300% of design-time base sizes (fonts, controls, spacing).
 UI_DISPLAY_SCALE = 3.0
 
-# Cover: multiply min(width, height) fit (1.0 = fill). ih/metadata fix is the main size win.
-ART_SIZE_MULT = 1.0
+# Cover: multiply min(width, height) fit. ih/metadata fix is the main size win.
+ART_SIZE_MULT = 1.12
 # Hard cap in window pixels (must match AlbumArtLabel.set_square_size max).
 ART_SIDE_MAX = 2400
 
@@ -313,7 +313,7 @@ def _fg_post(path: str, body: Optional[dict[str, Any]], cfg: GlsConfig) -> None:
 
 
 class HistoryTile(QWidget):
-    """Recent track: local cover (or icon) + caption; tap to play that URI on the device."""
+    """Recent playlist: artwork or icon only; tap to play that URI. Tooltip has track/playlist text."""
 
     play_requested = pyqtSignal(str)
 
@@ -326,7 +326,7 @@ class HistoryTile(QWidget):
         self.setFixedWidth(int(col_w))
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(_s(4))
+        v.setSpacing(0)
         self._play_uri = ""
         self._btn = QToolButton()
         self._btn.setObjectName("PlaylistTile")
@@ -337,15 +337,7 @@ class HistoryTile(QWidget):
         self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._btn.clicked.connect(self._on_btn)
-        self._caption = QLabel("—")
-        self._caption.setObjectName("PlaylistTileCaption")
-        self._caption.setWordWrap(True)
-        self._caption.setAlignment(
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
-        )
-        self._caption.setFixedWidth(max(40, int(col_w) - _s(8)))
         v.addWidget(self._btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        v.addWidget(self._caption, 0, Qt.AlignmentFlag.AlignHCenter)
         self._fallback_icon = tile_icon
         self._apply_empty()
 
@@ -356,8 +348,7 @@ class HistoryTile(QWidget):
 
     def _apply_empty(self) -> None:
         self._play_uri = ""
-        self._caption.setText("—")
-        self._caption.setToolTip("")
+        self._btn.setToolTip("")
         self._btn.setIcon(self._fallback_icon)
         self._btn.setEnabled(False)
 
@@ -376,15 +367,16 @@ class HistoryTile(QWidget):
             self._apply_empty()
             return
         self._play_uri = u
-        cap = (item.name or "—").strip() or "—"
-        if len(cap) > 48:
-            cap = cap[:45] + "…"
-        self._caption.setText(cap)
-        tip = f"{item.name}\n{(item.album_name or '').strip()}"
         art = ", ".join(item.artist_names) if item.artist_names else ""
+        pl = (item.context_uri or "").strip()
+        tip = f"{(item.name or '—').strip()}"
         if art:
-            tip = f"{item.name}\n{art}\n{(item.album_name or '').strip()}"
-        self._caption.setToolTip(tip.strip())
+            tip = f"{tip}\n{art}"
+        if (item.album_name or "").strip():
+            tip = f"{tip}\n{(item.album_name or '').strip()}"
+        if pl:
+            tip = f"{tip}\n{pl}"
+        self._btn.setToolTip(tip.strip())
         cp = history.resolve_cover(item)
         isz = self._btn.iconSize()
         iw, ih = isz.width(), isz.height()
@@ -419,6 +411,7 @@ class MainWindow(QMainWindow):
         self._hud_fade: Optional[QPropertyAnimation] = None
         self._history = PlaybackHistory()
         self._last_context_uri: str = ""
+        self._last_tr_for_history: Optional[dict[str, Any]] = None
         # repeat: 0=off, 1=one track, 2=whole context
         self._repeat_mode: int = 0
         self._is_playing = False
@@ -527,17 +520,11 @@ class MainWindow(QMainWindow):
                 color: #d4c4a8;
                 border: {b(2)}px solid #6a5a40;
                 border-radius: {b(10)}px;
-                padding: {b(6)}px;
-                min-width: {b(72)}px;
-                min-height: {b(72)}px;
-                max-width: {b(86)}px;
-                max-height: {b(86)}px;
-            }}
-            QLabel#PlaylistTileCaption {{
-                color: #b8a890;
-                font-size: {b(14)}px;
-                font-weight: 600;
-                font-family: Palatino, Georgia, serif;
+                padding: {b(4)}px;
+                min-width: {b(96)}px;
+                min-height: {b(96)}px;
+                max-width: {b(104)}px;
+                max-height: {b(104)}px;
             }}
             QToolButton#PlaylistTile:hover:enabled {{
                 background-color: #3a3024;
@@ -619,7 +606,7 @@ class MainWindow(QMainWindow):
         art_row.setSpacing(_btn(6))
         art_row.setContentsMargins(0, 0, 0, 0)
         art_row.addLayout(left_nav, 0)
-        self.album_art = AlbumArtLabel(480)
+        self.album_art = AlbumArtLabel(520)
         self.album_art.clicked.connect(self._on_playpause)
         art_row.addWidget(self.album_art, 1, Qt.AlignmentFlag.AlignCenter)
         art_row.addLayout(right_nav, 0)
@@ -713,9 +700,9 @@ class MainWindow(QMainWindow):
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
-        # Far left / far right: six recent-track tiles. Use _btn (½ design scale) for
-        # column width so two rails + center fit on screen; _s(220) was ~660px each at 3×.
-        self._playlist_col_w = _btn(200)
+        # Far left / far right: six recent-playlist tiles (artwork only, no caption).
+        self._playlist_col_w = _btn(108)
+        self._history_tile_icon_px = _btn(88)
         self._playlist_tile_icon = self._load_playlist_tile_icon()
         self._history_tiles: list[HistoryTile] = []
         self._playlist_left, tiles_l = self._make_history_column()
@@ -782,7 +769,9 @@ class MainWindow(QMainWindow):
         if not path.is_file():
             _log.warning("Missing icon: %s", path)
             return QIcon()
-        return svg_colored_icon(path, "#c9a43a", _btn(40))
+        return svg_colored_icon(
+            path, "#c9a43a", int(getattr(self, "_history_tile_icon_px", _btn(88)))
+        )
 
     def _make_history_column(self) -> tuple[QWidget, list[HistoryTile]]:
         w = QWidget()
@@ -791,7 +780,7 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(0, _s(2), 0, 0)
         v.setSpacing(_s(8))
         tiles: list[HistoryTile] = []
-        ipx = _btn(40)
+        ipx = int(getattr(self, "_history_tile_icon_px", _btn(88)))
         for _ in range(3):
             t = HistoryTile(
                 self._playlist_tile_icon,
@@ -903,7 +892,11 @@ class MainWindow(QMainWindow):
         if isinstance(data, dict):
             cu = data.get("context_uri")
             if isinstance(cu, str) and cu.strip():
-                self._last_context_uri = cu.strip()
+                newc = cu.strip()
+                if newc != self._last_context_uri:
+                    self._last_context_uri = newc
+                    if self._last_tr_for_history is not None:
+                        self._record_track_history(self._last_tr_for_history)
         if et in ("playback_ready", "active"):
             self._request_status_bg()
         elif et == "metadata" and isinstance(data, dict):
@@ -1046,9 +1039,11 @@ class MainWindow(QMainWindow):
         self._set_progress(self._position_ms, self._duration_ms)
         QTimer.singleShot(0, self._reflow_album_size)
         self._sync_pause_overlay()
+        self._last_tr_for_history = dict(tr)
         self._record_track_history(tr)
 
     def _clear_track(self) -> None:
+        self._last_tr_for_history = None
         self._is_paused = False
         self.album_art.set_art_url(None)
         self.title_label.setText("No track")

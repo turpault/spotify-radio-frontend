@@ -1,8 +1,9 @@
 """
-Persist last N played tracks: metadata + album art on disk (no Spotify Web API).
+Persist last N distinct **playlist (context)** URIs: track metadata as snapshot + art on disk.
 
-Uses go-librespot ``/status`` and WebSocket events only. ``context_uri`` comes from
-WebSocket event payloads (``playing``, ``will_play``, ``seek``, etc.), not from GET /status.
+``context_uri`` from go-librespot WebSocket events is the playback context (playlist, album, …);
+we dedupe by that URI and only add when it is not already in the last six entries. Uses
+``/status`` + WebSocket only (no Spotify Web API).
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ def default_data_dir() -> Path:
 
 @dataclass
 class HistoryItem:
-    """One row in the recent list (newest first on disk and in memory)."""
+    """One row: a distinct playlist/context URI (newest first). Snapshot of one track for art/label."""
 
     entry_id: str
     context_uri: str
@@ -49,14 +50,12 @@ class HistoryItem:
     recorded_at: float
 
     def play_uri(self) -> str:
-        """URI for POST /player/play — prefer context when present."""
+        """Use playlist/context URI for POST /player/play."""
         c = (self.context_uri or "").strip()
-        t = (self.track_uri or "").strip()
         if c.startswith("spotify:"):
             return c
-        if t.startswith("spotify:"):
-            return t
-        return t or c
+        t = (self.track_uri or "").strip()
+        return t if t.startswith("spotify:") else c
 
 
 def _safe_cover_key(uri: str) -> str:
@@ -90,7 +89,6 @@ class PlaybackHistory:
         self._covers = self._dir / "covers"
         self._index_path = self._dir / "recent_tracks.json"
         self._items: list[HistoryItem] = []
-        self._last_recorded_track_uri: str = ""
         self._lock = threading.Lock()
         self._load()
 
@@ -151,8 +149,6 @@ class PlaybackHistory:
                 _log.debug("Skip bad history row: %s", e)
         with self._lock:
             self._items = out[:_MAX_ENTRIES]
-            if out:
-                self._last_recorded_track_uri = (out[0].track_uri or "").strip()
 
     def _save_locked(self) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -174,16 +170,20 @@ class PlaybackHistory:
         on_art_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[HistoryItem]:
         """
-        If ``tr`` is a new track vs. last record, append (newest first), persist, and
-        optionally start cover download. Returns the new :class:`HistoryItem` or None.
+        Record a new row only if ``context_uri`` (playlist / playback context) is a Spotify URI
+        and is **not** already among the last six. Track fields are a display snapshot; cover
+        file is keyed by context URI. Returns a new :class:`HistoryItem` or None.
         """
+        pl = (context_uri or "").strip()
+        if not pl.startswith("spotify:"):
+            return None
         uri = (tr.get("uri") or "").strip()
         if not uri:
             return None
         with self._lock:
-            if uri == self._last_recorded_track_uri:
+            existing = {it.context_uri for it in self._items if it.context_uri}
+            if pl in existing:
                 return None
-            self._last_recorded_track_uri = uri
             name = str(tr.get("name") or "—")
             artists = tr.get("artist_names")
             if not isinstance(artists, list):
@@ -196,7 +196,7 @@ class PlaybackHistory:
                 art_s = None
             item = HistoryItem(
                 entry_id=str(uuid.uuid4()),
-                context_uri=(context_uri or "").strip(),
+                context_uri=pl,
                 track_uri=uri,
                 name=name,
                 artist_names=artist_s,
@@ -213,13 +213,14 @@ class PlaybackHistory:
                 _log.warning("Failed saving history index: %s", e)
             eid = item.entry_id
             cover_url = art_s
+            cover_key_uri = pl
 
         if on_persisted is not None:
             on_persisted()
         if cover_url:
             threading.Thread(
                 target=self._download_cover_bg,
-                args=(eid, uri, cover_url, on_art_ready),
+                args=(eid, cover_key_uri, cover_url, on_art_ready),
                 daemon=True,
                 name="gls-history-art",
             ).start()
@@ -228,11 +229,11 @@ class PlaybackHistory:
     def _download_cover_bg(
         self,
         entry_id: str,
-        track_uri: str,
+        playlist_or_context_uri: str,
         url: str,
         on_art_ready: Optional[Callable[[], None]],
     ) -> None:
-        key = _safe_cover_key(track_uri)
+        key = _safe_cover_key(playlist_or_context_uri)
         rel: Optional[str] = None
         try:
             req = Request(
