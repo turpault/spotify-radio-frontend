@@ -50,11 +50,12 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from gls_client import GlsApiError, GlsConfig, get_json, get_me_playlist_names, post_json
+from gls_client import GlsApiError, GlsConfig, MePlaylist, get_json, get_me_playlists, post_json
 from icon_utils import svg_colored_icon
 
 _log = logging.getLogger("gls-frontend")
@@ -417,6 +418,32 @@ class MainWindow(QMainWindow):
                 border: {b(3)}px solid #d8b85a;
                 color: #fff8e0;
             }}
+            QToolButton#PlaylistTile {{
+                background-color: #2a2218;
+                color: #d4c4a8;
+                border: {b(2)}px solid #6a5a40;
+                border-radius: {b(10)}px;
+                font-size: {b(14)}px;
+                font-weight: 600;
+                padding: {b(8)}px {b(4)}px;
+                min-width: {b(84)}px;
+                min-height: {b(96)}px;
+                max-width: {b(200)}px;
+                font-family: Palatino, Georgia, serif;
+            }}
+            QToolButton#PlaylistTile:hover:enabled {{
+                background-color: #3a3024;
+                border-color: #c9a43a;
+                color: #fff8e8;
+            }}
+            QToolButton#PlaylistTile:pressed:enabled {{
+                background-color: #1e1810;
+            }}
+            QToolButton#PlaylistTile:disabled {{
+                color: #5a4a3a;
+                background-color: #1e1a16;
+                border-color: #3a3028;
+            }}
             """
         )
         self.setWindowFlags(
@@ -562,12 +589,13 @@ class MainWindow(QMainWindow):
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
-        # Far left / far right: six playlist name slots (Spotify Web API via go-librespot /web-api).
-        self._playlist_col_w = _s(200)
-        self._playlist_name_labels: list[QLabel] = []
-        self._playlist_left, labs_l = self._make_playlist_column()
-        self._playlist_right, labs_r = self._make_playlist_column()
-        self._playlist_name_labels = labs_l + labs_r
+        # Far left / far right: six playlist tiles (icon + name; Web API + POST /player/play).
+        self._playlist_col_w = _s(220)
+        self._playlist_tile_icon = self._load_playlist_tile_icon()
+        self._playlist_tiles: list[QToolButton] = []
+        self._playlist_left, tiles_l = self._make_playlist_column()
+        self._playlist_right, tiles_r = self._make_playlist_column()
+        self._playlist_tiles = tiles_l + tiles_r
 
         main_hero = QHBoxLayout()
         main_hero.setSpacing(_btn(20))
@@ -613,29 +641,48 @@ class MainWindow(QMainWindow):
         prog.addWidget(self.duration_label)
         root.addLayout(prog)
 
-    def _make_playlist_column(self) -> tuple[QWidget, list[QLabel]]:
+    def _load_playlist_tile_icon(self) -> QIcon:
+        path = _ICONS_DIR / "list-music.svg"
+        if not path.is_file():
+            _log.warning("Missing icon: %s", path)
+            return QIcon()
+        return svg_colored_icon(path, "#c9a43a", _btn(40))
+
+    @staticmethod
+    def _ellip_playlist_caption(s: str, max_chars: int = 22) -> str:
+        t = (s or "").strip() or "—"
+        if len(t) <= max_chars:
+            return t
+        return t[: max_chars - 1] + "\u2026"
+
+    def _make_playlist_column(self) -> tuple[QWidget, list[QToolButton]]:
         w = QWidget()
         w.setFixedWidth(self._playlist_col_w)
         v = QVBoxLayout(w)
         v.setContentsMargins(0, _s(2), 0, 0)
         v.setSpacing(_s(8))
-        pl_style = (
-            f"color: #b8a888; font-size: {_s(14)}px; "
-            "font-family: Palatino, Georgia, serif;"
-        )
-        labels: list[QLabel] = []
+        tiles: list[QToolButton] = []
         for _ in range(3):
-            lb = QLabel("—")
-            lb.setWordWrap(True)
-            lb.setAlignment(
-                Qt.AlignmentFlag.AlignHCenter
-                | Qt.AlignmentFlag.AlignTop
+            btn = QToolButton()
+            btn.setObjectName("PlaylistTile")
+            btn.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonTextUnderIcon
             )
-            lb.setStyleSheet(pl_style)
-            labels.append(lb)
-            v.addWidget(lb, 0)
+            btn.setIcon(self._playlist_tile_icon)
+            btn.setIconSize(QSize(_btn(40), _btn(40)))
+            btn.setText("—")
+            btn.setProperty("glsPlaylistUri", "")
+            btn.setEnabled(False)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setSizePolicy(
+                QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
+            )
+            btn.clicked.connect(self._on_playlist_tile_clicked)
+            tiles.append(btn)
+            v.addWidget(btn, 0)
         v.addStretch(1)
-        return w, labels
+        return w, tiles
 
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
@@ -790,12 +837,12 @@ class MainWindow(QMainWindow):
     def _request_playlists_bg(self) -> None:
         def work() -> None:
             try:
-                names = get_me_playlist_names(self._cfg, limit=6)
+                pls = get_me_playlists(self._cfg, limit=6)
             except GlsApiError as e:
                 _log.warning("playlists: %s", e)
                 QTimer.singleShot(0, partial(self._on_playlists_failed))
                 return
-            QTimer.singleShot(0, partial(self._on_playlists_ok, names))
+            QTimer.singleShot(0, partial(self._on_playlists_ok, pls))
 
         threading.Thread(
             target=work, daemon=True, name="gls-playlists"
@@ -803,17 +850,53 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_playlists_failed(self) -> None:
-        for lab in self._playlist_name_labels:
-            lab.setText("—")
+        for btn in self._playlist_tiles:
+            btn.setProperty("glsPlaylistUri", "")
+            btn.setText("—")
+            btn.setToolTip("")
+            btn.setEnabled(False)
 
     @pyqtSlot(object)
-    def _on_playlists_ok(self, names: object) -> None:
-        if not isinstance(names, list):
-            names = []
-        name_strs = [str(x) for x in names if x is not None]
-        name_strs = (name_strs + ["—"] * 6)[:6]
-        for i, lab in enumerate(self._playlist_name_labels):
-            lab.setText(name_strs[i])
+    def _on_playlists_ok(self, pls: object) -> None:
+        rows: list[Optional[MePlaylist]] = []
+        if isinstance(pls, list):
+            for x in pls:
+                if isinstance(x, MePlaylist):
+                    rows.append(x)
+        while len(rows) < 6:
+            rows.append(None)
+        rows = rows[:6]
+        for i, btn in enumerate(self._playlist_tiles):
+            pl = rows[i]
+            if pl is not None and pl.uri:
+                btn.setProperty("glsPlaylistUri", pl.uri)
+                btn.setText(self._ellip_playlist_caption(pl.name))
+                btn.setToolTip(pl.name)
+                btn.setIcon(self._playlist_tile_icon)
+                btn.setEnabled(True)
+            else:
+                btn.setProperty("glsPlaylistUri", "")
+                btn.setText("—")
+                btn.setToolTip("")
+                btn.setIcon(self._playlist_tile_icon)
+                btn.setEnabled(False)
+            # refresh style after dynamic property
+            st = btn.style()
+            st.unpolish(btn)
+            st.polish(btn)
+
+    @pyqtSlot()
+    def _on_playlist_tile_clicked(self) -> None:
+        btn = self.sender()
+        if not isinstance(btn, QToolButton):
+            return
+        raw = btn.property("glsPlaylistUri")
+        uri = raw if isinstance(raw, str) else ""
+        uri = uri.strip()
+        if not uri.startswith("spotify:"):
+            return
+        _log.info("play playlist context %s", uri)
+        self._post_bg("/player/play", {"uri": uri, "paused": False})
 
     @pyqtSlot(str)
     def _on_status_failed(self, msg: str) -> None:

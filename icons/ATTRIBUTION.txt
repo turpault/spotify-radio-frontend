@@ -1,4 +1,4 @@
 Bundled SVG icons from Lucide (https://lucide.dev / https://github.com/lucide-icons/lucide)
 
-Files: shuffle.svg, repeat.svg, repeat-1.svg
+Files: shuffle.svg, repeat.svg, repeat-1.svg, list-music.svg
 License: ISC (see https://github.com/lucide-icons/lucide/blob/main/LICENSE)

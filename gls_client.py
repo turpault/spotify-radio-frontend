@@ -95,11 +95,19 @@ def post_json(
         raise GlsApiError(f"POST {path}: HTTP {code} {text[:500]}")
 
 
-def get_me_playlist_names(
+@dataclass
+class MePlaylist:
+    """One row from GET /v1/me/playlists (via daemon /web-api proxy)."""
+
+    name: str
+    uri: str  # e.g. spotify:playlist:… — use with POST /player/play
+
+
+def get_me_playlists(
     cfg: Optional[GlsConfig] = None, *, limit: int = 6, offset: int = 0
-) -> list[str]:
+) -> list[MePlaylist]:
     """
-    Current user's playlist names via go-librespot's /web-api/ proxy (session auth, not OAuth).
+    Current user's playlists (name + uri) via go-librespot's /web-api/ proxy (session auth).
 
     https://github.com/devgianlu/go-librespot — GET /web-api/* forwards to Spotify Web API.
     """
@@ -111,9 +119,22 @@ def get_me_playlist_names(
     items = data.get("items")
     if not isinstance(items, list):
         return []
-    out: list[str] = []
+    out: list[MePlaylist] = []
     for it in items:
-        if isinstance(it, dict):
-            n = it.get("name")
-            out.append(str(n) if n is not None else "—")
+        if not isinstance(it, dict):
+            continue
+        name = it.get("name")
+        name_s = str(name) if name is not None else "—"
+        uri = it.get("uri")
+        if not (isinstance(uri, str) and uri.strip()):
+            pid = it.get("id")
+            if isinstance(pid, str) and pid.strip():
+                uri = f"spotify:playlist:{pid.strip()}"
+            else:
+                uri = ""
+        else:
+            uri = str(uri).strip()
+        if not uri:
+            continue
+        out.append(MePlaylist(name=name_s, uri=uri))
     return out
