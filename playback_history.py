@@ -2,7 +2,7 @@
 Persist last N distinct **playlist (context)** URIs: track metadata as snapshot + art on disk.
 
 ``context_uri`` from go-librespot WebSocket events is the playback context (playlist, album, …);
-we dedupe by that URI and only add when it is not already in the last six entries. Uses
+we dedupe by that URI and only add when it is not already in the last eight entries. Uses
 ``/status`` + WebSocket only (no Spotify Web API).
 """
 
@@ -23,7 +23,7 @@ from urllib.request import Request, urlopen
 
 _log = logging.getLogger("gls-frontend.history")
 
-_MAX_ENTRIES = 6
+_MAX_ENTRIES = 8
 
 # Data dir: override with JUKEBOX_GLS_DATA_DIR
 def default_data_dir() -> Path:
@@ -81,7 +81,7 @@ def _as_str_list(x: Any) -> list[str]:
 
 class PlaybackHistory:
     """
-    Append-only style recent list (max 6), JSON index + cover files under data dir.
+    Append-only style recent list (max 8), JSON index + cover files under data dir.
     """
 
     def __init__(self, data_dir: Optional[Path] = None) -> None:
@@ -171,7 +171,7 @@ class PlaybackHistory:
     ) -> Optional[HistoryItem]:
         """
         Record a new row only if ``context_uri`` (playlist / playback context) is a Spotify URI
-        and is **not** already among the last six. Track fields are a display snapshot; cover
+        and is **not** already among the last eight. Track fields are a display snapshot; cover
         file is keyed by context URI. Returns a new :class:`HistoryItem` or None.
         """
         pl = (context_uri or "").strip()

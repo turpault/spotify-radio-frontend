@@ -4,7 +4,7 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-The six side tiles show the last **six distinct playlist (context) URIs**; metadata and art
+Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
 ``~/.config/jukebox-frontend-go-librespot/``). Tap a tile to start that URI via the local player
 API (no Spotify Web / Connect REST client).
@@ -61,7 +61,7 @@ from PyQt6.QtWidgets import (
 
 from gls_client import GlsApiError, GlsConfig, get_json, post_json
 from icon_utils import svg_colored_icon
-from playback_history import HistoryItem, PlaybackHistory
+from playback_history import _MAX_ENTRIES, HistoryItem, PlaybackHistory
 
 _log = logging.getLogger("gls-frontend")
 
@@ -715,7 +715,7 @@ class MainWindow(QMainWindow):
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
-        # Far left / far right: six recent-playlist tiles (artwork only, no caption).
+        # Far left / far right: four recent-playlist tiles per side (artwork only, no caption).
         self._playlist_col_w = _btn(108)
         self._history_tile_icon_px = _btn(88)
         self._playlist_tile_icon = self._load_playlist_tile_icon()
@@ -796,7 +796,8 @@ class MainWindow(QMainWindow):
         v.setSpacing(_s(8))
         tiles: list[HistoryTile] = []
         ipx = int(getattr(self, "_history_tile_icon_px", _btn(88)))
-        for _ in range(3):
+        n_per_col = _MAX_ENTRIES // 2
+        for _ in range(n_per_col):
             t = HistoryTile(
                 self._playlist_tile_icon,
                 ipx,
@@ -811,9 +812,9 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _apply_history_tiles(self) -> None:
         rows: list[Optional[HistoryItem]] = list(self._history.items)
-        while len(rows) < 6:
+        while len(rows) < _MAX_ENTRIES:
             rows.append(None)
-        rows = rows[:6]
+        rows = rows[:_MAX_ENTRIES]
         for i, tile in enumerate(self._history_tiles):
             pl = rows[i] if i < len(rows) else None
             tile.set_history_item(pl, self._history, self._playlist_tile_icon)
