@@ -245,6 +245,29 @@ def get_me_playlists_gls_proxy(
     return out
 
 
+_playlist_oauth_missing_logged: bool = False
+
+
+def _log_spotify_oauth_missing_once(cfg: Optional[GlsConfig]) -> None:
+    """Once per process: explain why requests go to the daemon, not api.spotify.com."""
+    global _playlist_oauth_missing_logged
+    if _playlist_oauth_missing_logged:
+        return
+    _playlist_oauth_missing_logged = True
+    try:
+        from spotify_web_api import token_path
+    except ImportError:
+        return
+    base = (cfg or GlsConfig.from_env()).base
+    _log.warning(
+        "me/playlists: NOT calling https://api.spotify.com (no OAuth). "
+        "Set env SPOTIFY_ACCESS_TOKEN, or add a token file (see %s and module spotify_web_api). "
+        "Using go-librespot HTTP proxy at %s/web-api/… instead.",
+        token_path(),
+        base,
+    )
+
+
 def get_me_playlists(
     cfg: Optional[GlsConfig] = None, *, limit: int = 6, offset: int = 0
 ) -> list[MePlaylist]:
@@ -260,15 +283,26 @@ def get_me_playlists(
         "true",
         "yes",
     ):
+        _log.info("me/playlists: GOLIBRESPOT_FORCE_LIBRESPOT_PLAYLISTS — using daemon /web-api/ only")
         return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
     try:
         import spotify_web_api as swa  # lazy: avoids import cycle
+    except ImportError as e:
+        _log.warning("me/playlists: spotify_web_api unavailable (%s), using proxy", e)
+        return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
 
-        if swa.is_configured():
-            _log.info("me/playlists: using Spotify Web API (api.spotify.com/v1/me/playlists)")
-            return swa.fetch_current_user_playlists(
-                cfg, limit=limit, offset=offset
+    if swa.is_configured():
+        _log.info(
+            "me/playlists: GET https://api.spotify.com/v1/me/playlists (OAuth Bearer, not 127.0.0.1)"
+        )
+        try:
+            return swa.fetch_current_user_playlists(cfg, limit=limit, offset=offset)
+        except Exception as e:
+            _log.warning(
+                "me/playlists: Web API call failed (%s), falling back to go-librespot proxy",
+                e,
             )
-    except Exception as e:
-        _log.warning("me/playlists: Web API path failed (%s), falling back to go-librespot proxy", e)
+            return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
+
+    _log_spotify_oauth_missing_once(cfg)
     return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
