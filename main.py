@@ -4,7 +4,7 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Layout: built-in v2 in ``ui_layout_config.UI_LAYOUT_V2_DOCUMENT``; override via
+Layout: built-in v2 in ``ui_layout_v2_document.UI_LAYOUT_V2_DOCUMENT``; override via
 ``JUKEBOX_UI_LAYOUT`` JSON. ``w,h`` = size (one null ⇒ square, side from the other %); ``x,y`` =
 position (``null`` = center; < 0 = from right/bottom).
 
@@ -727,7 +727,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         self._ui_elements = load_ui_layout()
-        # Percent-based rects (0–1) of the central widget; see UI_LAYOUT_V2_DOCUMENT.
+        # Percent-based rects (0–1) of the central widget; see ui_layout_v2_document.
         self._ui_rect_map: dict[str, QWidget] = {}
 
         _meta_align = (

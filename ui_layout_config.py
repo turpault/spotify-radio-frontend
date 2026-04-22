@@ -1,6 +1,7 @@
 """
-Load UI layout for MainWindow. The built-in v2 document is :data:`UI_LAYOUT_V2_DOCUMENT`;
-optional JSON override: env ``JUKEBOX_UI_LAYOUT``. On disk, v2 ``w,h`` are **whole percent
+Load UI layout for MainWindow. The built-in v2 document is
+:data:`~ui_layout_v2_document.UI_LAYOUT_V2_DOCUMENT`; optional JSON override: env
+``JUKEBOX_UI_LAYOUT``. On disk, v2 ``w,h`` are **whole percent
 0–100** of width/height (or **null**; see below). **null** on ``w`` or ``h`` (not both): a
 **square**; side = the non-null value on its axis. **null** on ``x``/``y`` = center; negative
 ``x``/``y`` = inset from the right/bottom. In memory, fractions/``None``; v1: 0–1 floats.
@@ -13,6 +14,8 @@ import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Optional
+
+from ui_layout_v2_document import UI_LAYOUT_V2_DOCUMENT
 
 _log = logging.getLogger("gls-frontend.ui_layout")
 
@@ -387,39 +390,6 @@ def merge_ui_elements(
 
 
 LAYOUT_PATH_ENV = "JUKEBOX_UI_LAYOUT"
-
-# Built-in v2 layout (was ui_layout.json). ``JUKEBOX_UI_LAYOUT`` can point to a JSON file to override.
-UI_LAYOUT_V2_DOCUMENT: dict[str, Any] = {
-    "version": 2,
-    "description": (
-        "w,h: 0-100% of width/height; null w xor null h = square, side = non-null% on that axis. "
-        "x,y: null = center; <0 = from right/bottom. z: stack order. All keys x,y,w,h,z required."
-    ),
-    "elements": {
-        "artwork": {"x": 32, "y": 10, "w": 34, "h": 57, "z": 0},
-        "prev": {"x": 33, "y": 57, "w": 8, "h": 10, "z": 40},
-        "seek_back_30": {"x": 42, "y": 57, "w": 8, "h": 10, "z": 40},
-        "seek_fwd_30": {"x": 50, "y": 57, "w": 8, "h": 10, "z": 40},
-        "next": {"x": 58, "y": 57, "w": 8, "h": 10, "z": 40},
-        "volume_up": {"x": 13, "y": 10, "w": 8, "h": 10, "z": 20},
-        "volume_down": {"x": 13, "y": 21, "w": 8, "h": 10, "z": 20},
-        "shuffle": {"x": 78, "y": 10, "w": 9, "h": 9, "z": 30},
-        "repeat": {"x": 78, "y": 21, "w": 9, "h": 9, "z": 30},
-        "playlist_0": {"x": 4, "y": 11, "w": 8, "h": 13, "z": 10},
-        "playlist_1": {"x": 4, "y": 26, "w": 8, "h": 13, "z": 10},
-        "playlist_2": {"x": 4, "y": 40, "w": 8, "h": 13, "z": 10},
-        "playlist_3": {"x": 4, "y": 55, "w": 8, "h": 13, "z": 10},
-        "playlist_4": {"x": 88, "y": 11, "w": 8, "h": 13, "z": 10},
-        "playlist_5": {"x": 88, "y": 26, "w": 8, "h": 13, "z": 10},
-        "playlist_6": {"x": 88, "y": 40, "w": 8, "h": 13, "z": 10},
-        "playlist_7": {"x": 88, "y": 55, "w": 8, "h": 13, "z": 10},
-        "title": {"x": 4, "y": 69, "w": 93, "h": 4, "z": 50},
-        "artist": {"x": 4, "y": 73, "w": 93, "h": 3, "z": 50},
-        "album": {"x": 4, "y": 76, "w": 93, "h": 3, "z": 50},
-        "sub_label": {"x": 4, "y": 79, "w": 93, "h": 2, "z": 55},
-        "progress": {"x": 4, "y": 89, "w": 93, "h": 2, "z": 60},
-    },
-}
 
 
 def default_json_document() -> dict[str, Any]:
