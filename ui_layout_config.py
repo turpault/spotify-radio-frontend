@@ -36,7 +36,28 @@ def _n(W: float, H: float, x: float, y: float, w: float, h: float) -> dict[str, 
     }
 
 
-def default_ui_elements() -> dict[str, dict[str, float]]:
+# Stacking: lower z is painted first (further back); higher z is on top. Ties: sorted by name.
+def _Z_ORDER() -> dict[str, int]:
+    return {
+        "artwork": 0,
+        **{f"playlist_{i}": 10 for i in range(8)},
+        "volume_up": 20,
+        "volume_down": 20,
+        "shuffle": 30,
+        "repeat": 30,
+        "prev": 40,
+        "seek_back_30": 40,
+        "seek_fwd_30": 40,
+        "next": 40,
+        "title": 50,
+        "artist": 50,
+        "album": 50,
+        "sub_label": 55,
+        "progress": 60,
+    }
+
+
+def default_ui_elements() -> dict[str, dict[str, Any]]:
     """
     Reproduce the pre-config layout as fractions of a reference 2000×1200
     client (used only to convert former pixel math to 0-1; scales with any size).
@@ -89,7 +110,7 @@ def default_ui_elements() -> dict[str, dict[str, float]]:
     art_x = x_c + (cw - float(side)) / 2.0
     art_y = y_hero + (h65 - float(side)) / 2.0
 
-    out: dict[str, dict[str, float]] = {}
+    out: dict[str, dict[str, Any]] = {}
     out["artwork"] = _n(W, H, art_x, art_y, float(side), float(side))
 
     tpad = float(_s(8))
@@ -148,6 +169,10 @@ def default_ui_elements() -> dict[str, dict[str, float]]:
     py0 = y_prog + max(0.0, 0.5 * h10 - 0.5 * ph)
     out["progress"] = _n(W, H, m, py0, iw, ph)
 
+    zord = _Z_ORDER()
+    for k in out:
+        out[k]["z"] = zord.get(k, 0)
+
     return out
 
 
@@ -187,8 +212,8 @@ def _rect_ok(r: dict[str, Any]) -> bool:
 
 
 def merge_ui_elements(
-    data: Any, defaults: dict[str, dict[str, float]]
-) -> dict[str, dict[str, float]]:
+    data: Any, defaults: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     out = deepcopy(defaults)
     if not isinstance(data, dict):
         return out
@@ -201,11 +226,17 @@ def merge_ui_elements(
         if not _rect_ok(v):
             _log.warning("ui layout: skip invalid rect for %r", k)
             continue
+        z_prev = int(out[k].get("z", 0))
+        try:
+            z_merged = int(v["z"])
+        except (KeyError, TypeError, ValueError):
+            z_merged = z_prev
         out[k] = {
             "x": float(v["x"]),
             "y": float(v["y"]),
             "w": float(v["w"]),
             "h": float(v["h"]),
+            "z": z_merged,
         }
     return out
 
@@ -220,7 +251,10 @@ def default_json_document() -> dict[str, Any]:
             _log.error("default_ui_elements missing %s", k)
     return {
         "version": 1,
-        "description": "x,y,w,h are fractions 0-1 of central widget size (width/height).",
+        "description": (
+            "x,y,w,h are fractions 0-1 of central widget size. "
+            "z is stack order: lower = further back, higher = on top (ties: name order)."
+        ),
         "elements": d,
     }
 
@@ -232,7 +266,7 @@ def config_search_paths() -> list[Path]:
     ]
 
 
-def load_ui_layout() -> dict[str, dict[str, float]]:
+def load_ui_layout() -> dict[str, dict[str, Any]]:
     defaults = default_ui_elements()
     p = config_search_paths()[0]
     if p.is_file():

@@ -476,25 +476,6 @@ class HistoryTile(QWidget):
 
 
 class MainWindow(QMainWindow):
-    # Bottom → top for raise_ (controls above artwork).
-    _UI_RAISE_Z: tuple[str, ...] = ("artwork",) + tuple(
-        f"playlist_{i}" for i in range(8)
-    ) + (
-        "volume_up",
-        "volume_down",
-        "shuffle",
-        "repeat",
-        "prev",
-        "seek_back_30",
-        "seek_fwd_30",
-        "next",
-        "title",
-        "artist",
-        "album",
-        "sub_label",
-        "progress",
-    )
-
     def __init__(self) -> None:
         super().__init__()
         self._cfg = GlsConfig.from_env()
@@ -853,11 +834,12 @@ class MainWindow(QMainWindow):
         )
 
     def _apply_ui_layout(self) -> None:
-        """Size/position from self._ui_elements (fractions of central widget)."""
+        """Size/position from self._ui_elements (fractions of central widget); z = stack order."""
         cw = self.centralWidget()
         if cw is None or not self._ui_rect_map:
             return
         W, H = max(1, cw.width()), max(1, cw.height())
+        stack: list[tuple[tuple[int, str], QWidget]] = []
         for name, w in self._ui_rect_map.items():
             r = self._ui_elements.get(name)
             if r is None:
@@ -869,8 +851,14 @@ class MainWindow(QMainWindow):
             w.setGeometry(x, y, max(1, ww), max(1, hh))
             if name.startswith("playlist_") and isinstance(w, HistoryTile):
                 w.refit(ww, hh)
-        for key in self._UI_RAISE_Z:
-            w = self._ui_rect_map.get(key)
+            try:
+                z = int(r.get("z", 0))
+            except (TypeError, ValueError):
+                z = 0
+            # Sort by (z, name) so equal-z stacking is stable.
+            stack.append(((z, name), w))
+        stack.sort(key=lambda t: t[0])
+        for _key, w in stack:
             if w is not None:
                 w.raise_()
         if self._volume_overlay is not None:
