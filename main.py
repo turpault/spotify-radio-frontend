@@ -55,10 +55,20 @@ _log = logging.getLogger("gls-frontend")
 
 # go-librespot uses {"type": "...", "data": ...} (cmd/daemon/api_server.go ApiEvent).
 
+# Global display scale: 3.0 = 300% of design-time base sizes (fonts, controls, spacing).
+UI_DISPLAY_SCALE = 3.0
+
+
+def _s(n: float) -> int:
+    """Scale a layout size (px, pt) by UI_DISPLAY_SCALE; minimum 1 pixel."""
+    return max(1, int(round(n * UI_DISPLAY_SCALE)))
+
+
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
 _STYLE_ALBUM_PLACEHOLDER = (
-    "background-color: #1a1510; color: #5a5048; border: 3px solid #8b7355; "
-    "border-radius: 8px; font-family: Palatino, 'Times New Roman', serif;"
+    f"background-color: #1a1510; color: #5a5048; border: {_s(3)}px solid #8b7355; "
+    f"border-radius: {_s(8)}px; font-size: {_s(18)}px; "
+    "font-family: Palatino, 'Times New Roman', serif;"
 )
 
 
@@ -141,6 +151,7 @@ class AlbumArtLabel(QLabel):
         self.setPixmap(scaled)
 
     def set_square_size(self, side: int) -> None:
+        # Window-pixel bounds for cover (layout chrome already scales via UI_DISPLAY_SCALE)
         side = max(160, min(1200, int(side)))
         if side == self._art_size:
             return
@@ -158,47 +169,49 @@ class VolumeOverlay(QFrame):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setObjectName("volumeOverlay")
         self.setStyleSheet(
-            """
-            #volumeOverlay { background-color: rgba(20, 14, 10, 0.72); }
-            QFrame#volumeHudCard {
+            f"""
+            #volumeOverlay {{ background-color: rgba(20, 14, 10, 0.72); }}
+            QFrame#volumeHudCard {{
                 background-color: rgba(52, 42, 34, 248);
-                border-radius: 20px;
-                border: 3px solid #9a7b4a;
-            }
-            QLabel#hudPercent { color: #f0e6d4; font-weight: 600; }
-            QProgressBar {
-                border: 1px solid #5a4a38; border-radius: 5px; background: #1a1410; height: 14px;
-            }
-            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #a68428, stop:0.5 #d4a83c, stop:1 #8a6a20); border-radius: 3px; }
+                border-radius: {_s(20)}px;
+                border: {_s(3)}px solid #9a7b4a;
+            }}
+            QLabel#hudPercent {{ color: #f0e6d4; font-weight: 600; }}
+            QProgressBar {{
+                border: 1px solid #5a4a38; border-radius: {_s(5)}px; background: #1a1410; height: {_s(14)}px;
+            }}
+            QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #a68428, stop:0.5 #d4a83c, stop:1 #8a6a20); border-radius: {_s(3)}px; }}
             """
         )
         self._icon = QLabel("🔊")
         ic = QFont()
-        ic.setPointSize(56)
+        ic.setPointSize(_s(56))
         self._icon.setFont(ic)
         self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._bar = QProgressBar()
         self._bar.setTextVisible(False)
-        self._bar.setFixedHeight(14)
-        self._bar.setMinimumWidth(420)
-        self._bar.setMaximumWidth(520)
+        self._bar.setFixedHeight(_s(14))
+        self._bar.setMinimumWidth(_s(420))
+        self._bar.setMaximumWidth(_s(520))
         self._pct = QLabel("0")
         self._pct.setObjectName("hudPercent")
         pf = QFont()
-        pf.setPointSize(44)
+        pf.setPointSize(_s(44))
         pf.setBold(True)
         self._pct.setFont(pf)
         self._pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub = QLabel("")
-        self._sub.setStyleSheet("color: rgba(200, 185, 160, 0.75); font-size: 14px;")
+        self._sub.setStyleSheet(
+            f"color: rgba(200, 185, 160, 0.75); font-size: {_s(14)}px;"
+        )
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         card = QFrame()
         card.setObjectName("volumeHudCard")
         inner = QVBoxLayout(card)
-        inner.setContentsMargins(40, 36, 40, 36)
-        inner.setSpacing(20)
+        inner.setContentsMargins(_s(40), _s(36), _s(40), _s(36))
+        inner.setSpacing(_s(20))
         inner.addWidget(self._icon, alignment=Qt.AlignmentFlag.AlignCenter)
         inner.addWidget(self._pct, alignment=Qt.AlignmentFlag.AlignCenter)
         inner.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -288,36 +301,37 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("go-librespot")
+        s = _s
         self.setStyleSheet(
-            """
-            QMainWindow, QWidget { background-color: #241a14; color: #e8dcc4; border: none; }
-            QLabel { background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }
-            QPushButton {
+            f"""
+            QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
+            QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
+            QPushButton {{
                 background-color: #4a3d32;
                 color: #1a120c;
                 border: 2px solid #7a623e;
-                border-radius: 14px;
-                font-size: 22px;
+                border-radius: {s(14)}px;
+                font-size: {s(22)}px;
                 font-weight: bold;
-                padding: 12px 20px;
-                min-height: 44px;
-                min-width: 44px;
+                padding: {s(12)}px {s(20)}px;
+                min-height: {s(44)}px;
+                min-width: {s(44)}px;
                 font-family: Palatino, Georgia, serif;
-            }
-            QPushButton:hover { background-color: #5c4d40; border-color: #9a7b4a; }
-            QPushButton:pressed { background-color: #3d3228; }
-            QPushButton:disabled { color: #5a5048; background-color: #2e2620; border-color: #4a4036; }
-            QPushButton#IconTransport {
-                min-width: 70px; min-height: 70px; max-height: 80px; font-size: 30px; padding: 8px;
-                background-color: #3d3228; border: 2px solid #5a4a38; border-radius: 12px; color: #9a8a70;
-            }
-            QPushButton#IconTransport:hover { border-color: #9a7b4a; }
-            QPushButton#IconTransport:checked { color: #c9a43a; border: 3px solid #c9a43a; background-color: #4a3a20; }
-            QPushButton#RepeatCycle { min-width: 70px; min-height: 70px; font-size: 30px; padding: 8px; border-radius: 12px; background-color: #3d3228; border: 2px solid #5a4a38; }
-            QPushButton#RepeatCycle:hover { border-color: #9a7b4a; }
-            QPushButton#RepeatCycle[repeatState="off"] { color: #4a3a2a; }
-            QPushButton#RepeatCycle[repeatState="one"] { color: #c9a43a; border-color: #9a7b4a; }
-            QPushButton#RepeatCycle[repeatState="all"] { color: #c9a43a; border-color: #c9a43a; }
+            }}
+            QPushButton:hover {{ background-color: #5c4d40; border-color: #9a7b4a; }}
+            QPushButton:pressed {{ background-color: #3d3228; }}
+            QPushButton:disabled {{ color: #5a5048; background-color: #2e2620; border-color: #4a4036; }}
+            QPushButton#IconTransport {{
+                min-width: {s(70)}px; min-height: {s(70)}px; max-height: {s(80)}px; font-size: {s(30)}px; padding: {s(8)}px;
+                background-color: #3d3228; border: 2px solid #5a4a38; border-radius: {s(12)}px; color: #9a8a70;
+            }}
+            QPushButton#IconTransport:hover {{ border-color: #9a7b4a; }}
+            QPushButton#IconTransport:checked {{ color: #c9a43a; border: 3px solid #c9a43a; background-color: #4a3a20; }}
+            QPushButton#RepeatCycle {{ min-width: {s(70)}px; min-height: {s(70)}px; font-size: {s(30)}px; padding: {s(8)}px; border-radius: {s(12)}px; background-color: #3d3228; border: 2px solid #5a4a38; }}
+            QPushButton#RepeatCycle:hover {{ border-color: #9a7b4a; }}
+            QPushButton#RepeatCycle[repeatState="off"] {{ color: #4a3a2a; }}
+            QPushButton#RepeatCycle[repeatState="one"] {{ color: #c9a43a; border-color: #9a7b4a; }}
+            QPushButton#RepeatCycle[repeatState="all"] {{ color: #c9a43a; border-color: #c9a43a; }}
             """
         )
         self.setWindowFlags(
@@ -329,46 +343,52 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(18)
+        _m = _s(24)
+        root.setContentsMargins(_m, _m, _m, _m)
+        root.setSpacing(_s(18))
 
         self.prev_btn = QPushButton("⏮")
-        self.prev_btn.setFixedSize(88, 88)
+        self.prev_btn.setFixedSize(_s(88), _s(88))
         self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn = QPushButton("⏭")
-        self.next_btn.setFixedSize(88, 88)
+        self.next_btn.setFixedSize(_s(88), _s(88))
         self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30 = QPushButton("−30s")
         self.seek_fwd_30 = QPushButton("+30s")
         for b in (self.seek_back_30, self.seek_fwd_30):
-            b.setMinimumSize(88, 50)
+            b.setMinimumSize(_s(88), _s(50))
         self.seek_back_30.clicked.connect(self._on_seek_back_30)
         self.seek_fwd_30.clicked.connect(self._on_seek_fwd_30)
 
         left_nav = QVBoxLayout()
-        left_nav.setSpacing(10)
+        left_nav.setSpacing(_s(10))
         left_nav.addWidget(self.prev_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         left_nav.addWidget(self.seek_back_30, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav = QVBoxLayout()
-        right_nav.setSpacing(10)
+        right_nav.setSpacing(_s(10))
         right_nav.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.volume_down = QPushButton("−")
         self.volume_up = QPushButton("+")
         for b in (self.volume_down, self.volume_up):
-            b.setFixedSize(72, 72)
+            b.setFixedSize(_s(72), _s(72))
         self.volume_down.clicked.connect(self._on_volume_down)
         self.volume_up.clicked.connect(self._on_volume_up)
         self.vol_meta = QLabel("")
-        self.vol_meta.setStyleSheet("color: #7a6a58;")
+        self.vol_meta.setStyleSheet(
+            f"color: #7a6a58; font-size: {_s(15)}px; font-family: Palatino, Georgia, serif;"
+        )
         self.vol_rail = QWidget()
-        self.vol_rail.setFixedWidth(100)
+        self.vol_rail.setFixedWidth(_s(100))
         vol_col = QVBoxLayout(self.vol_rail)
         vol_col.setContentsMargins(0, 0, 0, 0)
-        vol_col.setSpacing(10)
+        vol_col.setSpacing(_s(10))
         vol_lbl = QLabel("Volume")
-        vol_lbl.setStyleSheet("color: #9a8a70;")
+        vol_lbl.setStyleSheet(
+            f"color: #9a8a70; font-size: {_s(16)}px; font-weight: 600; "
+            "font-family: Palatino, Georgia, serif;"
+        )
         vol_col.addWidget(vol_lbl, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addWidget(self.vol_meta, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
@@ -376,7 +396,7 @@ class MainWindow(QMainWindow):
         vol_col.addStretch(1)
 
         art_row = QHBoxLayout()
-        art_row.setSpacing(6)
+        art_row.setSpacing(_s(6))
         art_row.setContentsMargins(0, 0, 0, 0)
         art_row.addLayout(left_nav, 0)
         self.album_art = AlbumArtLabel(480)
@@ -395,7 +415,7 @@ class MainWindow(QMainWindow):
         self.title_label.setWordWrap(True)
         self.title_label.setAlignment(_meta_align)
         tfont = QFont()
-        tfont.setPointSize(20)
+        tfont.setPointSize(_s(20))
         tfont.setBold(True)
         self.title_label.setFont(tfont)
         info.addWidget(self.title_label, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -403,23 +423,29 @@ class MainWindow(QMainWindow):
         self.artist_label.setWordWrap(True)
         self.artist_label.setAlignment(_meta_align)
         af = QFont()
-        af.setPointSize(15)
+        af.setPointSize(_s(15))
         self.artist_label.setFont(af)
         self.artist_label.setStyleSheet("color: #c4b59a;")
         info.addWidget(self.artist_label, 0, Qt.AlignmentFlag.AlignHCenter)
         self.album_label = QLabel("")
         self.album_label.setWordWrap(True)
         self.album_label.setAlignment(_meta_align)
+        bf = QFont()
+        bf.setPointSize(_s(14))
+        self.album_label.setFont(bf)
         self.album_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.album_label, 0, Qt.AlignmentFlag.AlignHCenter)
         self.sub_label = QLabel("")
         self.sub_label.setAlignment(_meta_align)
+        sf = QFont()
+        sf.setPointSize(_s(12))
+        self.sub_label.setFont(sf)
         self.sub_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.sub_label, 0, Qt.AlignmentFlag.AlignHCenter)
         info.addStretch()
 
         center = QVBoxLayout()
-        self._center_vgap = 14
+        self._center_vgap = _s(14)
         center.setSpacing(self._center_vgap)
         center.addLayout(art_row, 1)
         center.addWidget(self.info_block, 0)
@@ -435,16 +461,16 @@ class MainWindow(QMainWindow):
         self.repeat_btn.clicked.connect(self._on_repeat_cycle)
         self._apply_repeat_ui()
         self.mode_rail = QWidget()
-        self.mode_rail.setFixedWidth(88)
+        self.mode_rail.setFixedWidth(_s(88))
         mode_col = QVBoxLayout(self.mode_rail)
         mode_col.setContentsMargins(0, 0, 0, 0)
-        mode_col.setSpacing(12)
+        mode_col.setSpacing(_s(12))
         mode_col.addWidget(self.shuffle_btn, 0, Qt.AlignmentFlag.AlignRight)
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignRight)
         mode_col.addStretch(1)
 
         main_hero = QHBoxLayout()
-        main_hero.setSpacing(20)
+        main_hero.setSpacing(_s(20))
         main_hero.addWidget(self.vol_rail, 0, Qt.AlignmentFlag.AlignTop)
         main_hero.addLayout(center, 1)
         main_hero.addWidget(self.mode_rail, 0, Qt.AlignmentFlag.AlignTop)
@@ -457,25 +483,25 @@ class MainWindow(QMainWindow):
         self.elapsed_label = QLabel("0:00")
         _time_style = (
             "color: #d4c4a8; font-family: 'Courier New', Courier, monospace; "
-            "font-size: 15px; font-weight: bold;"
+            f"font-size: {_s(15)}px; font-weight: bold;"
         )
         self.elapsed_label.setStyleSheet(_time_style)
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setStyleSheet(
-            """
-            QProgressBar {
+            f"""
+            QProgressBar {{
                 border: 1px solid #5a4a38;
-                border-radius: 5px;
+                border-radius: {_s(5)}px;
                 background: #14100c;
-                height: 12px;
-            }
-            QProgressBar::chunk {
+                height: {_s(12)}px;
+            }}
+            QProgressBar::chunk {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #8a6a24, stop:0.5 #c9a43a, stop:1 #6a5220);
-                border-radius: 3px;
-            }
+                border-radius: {_s(3)}px;
+            }}
             """
         )
         self.duration_label = QLabel("0:00")
@@ -492,7 +518,7 @@ class MainWindow(QMainWindow):
         root.addWidget(sep)
 
         hint = QLabel("API: " + self._cfg.base)
-        hint.setStyleSheet("color: #5a5048; font-size: 12px;")
+        hint.setStyleSheet(f"color: #5a5048; font-size: {_s(12)}px;")
         root.addWidget(hint)
 
     def _wire_shortcuts(self) -> None:
@@ -520,14 +546,15 @@ class MainWindow(QMainWindow):
         """Largest cover square that fits horizontally and in the main column above the progress bar."""
         w = max(400, self.width())
         h = max(400, self.height())
-        root_m = 24 * 2
-        hero_gaps = 20 * 2
+        # Match _build_ui scaled margins, gaps, and transport column width (device pixels)
+        root_m = _s(24) * 2
+        hero_gaps = _s(20) * 2
         side_rails = self.vol_rail.width() + self.mode_rail.width()
-        navcol = 96
+        navcol = _s(96)
         max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
-        # root: main_hero, spacing(18), prog, spacing(18), sep(1), spacing(18), hint
-        sp = 18
-        below_main = sp + 36 + sp + 1 + sp + 20
+        # root: main_hero, spacing, prog, spacing, sep(1), spacing, hint
+        sp = _s(18)
+        below_main = sp + _s(36) + sp + 1 + sp + _s(20)
         main_hero_h = h - root_m - below_main
         # Prefer post-layout height so wrapped title affects reserved space; else size hint.
         info_h = int(self.info_block.height())
