@@ -4,8 +4,8 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path): ``w,h`` = size; ``x,y`` = position
-(``null`` = center on that axis; < 0 = from right/bottom; see file ``description``).
+Layout: ``ui_layout.json``: ``w,h`` = size (one null ⇒ square, side from the other %); ``x,y`` =
+position (``null`` = center; < 0 = from right/bottom). See file ``description``.
 
 Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
@@ -893,29 +893,48 @@ class MainWindow(QMainWindow):
     def _layout_rect_from_fracs(
         r: dict[str, Any], W: int, H: int
     ) -> tuple[int, int, int, int]:
-        """Fracs: w,h>0. x/y None = center on that axis; else as ui_layout (L/T or R/B for negative)."""
-        wf = float(r["w"])
-        hf = float(r["h"])
+        """w/h fracs; null w xor h => square (side from non-null % of that axis). x/y null = center."""
+        wf = r.get("w")
+        hf = r.get("h")
+        if wf is not None:
+            wf = float(wf)
+        if hf is not None:
+            hf = float(hf)
         xf = r.get("x")
         yf = r.get("y")
         if xf is not None:
             xf = float(xf)
         if yf is not None:
             yf = float(yf)
-        ww = max(1, int(wf * W))
-        hh = max(1, int(hf * H))
+
+        if wf is not None and hf is not None:
+            ww = max(1, int(wf * W))
+            hh = max(1, int(hf * H))
+        elif wf is None and hf is not None:
+            s = max(1, int(hf * H))
+            s = min(s, W, H)
+            ww = hh = s
+        elif hf is None and wf is not None:
+            s = max(1, int(wf * W))
+            s = min(s, W, H)
+            ww = hh = s
+        else:
+            ww = hh = 1
+
+        wfr = ww / float(W)
+        hfr = hh / float(H)
         if xf is None:
             x_px = int((W - ww) // 2)
         elif xf >= 0.0:
             x_px = int(xf * W)
         else:
-            x_px = int(W * (1.0 - wf - abs(xf)))
+            x_px = int(W * (1.0 - wfr - abs(xf)))
         if yf is None:
             y_px = int((H - hh) // 2)
         elif yf >= 0.0:
             y_px = int(yf * H)
         else:
-            y_px = int(H * (1.0 - hf - abs(yf)))
+            y_px = int(H * (1.0 - hfr - abs(yf)))
         x_px = max(0, x_px)
         y_px = max(0, y_px)
         ww = min(ww, max(1, W - x_px))

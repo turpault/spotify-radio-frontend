@@ -1,10 +1,8 @@
 """
-Load UI layout for MainWindow. On disk (v2) ``w,h`` and positive ``x,y`` are **whole
-percent 0–100** of the central (rounded). **Negative** ``x`` or ``y`` is the distance
-from the right or bottom edge to the widget’s right or bottom, as a **positive** percent
-(value stored negative in the file, e.g. ``-5`` = 5% from the edge). **null** on ``x`` or
-``y`` means center on that axis. In memory, ``load_ui_layout()`` feeds fractions to the window;
-``None`` is allowed for an axis. Version 1 uses 0–1 floats (same rules).
+Load UI layout for MainWindow. On disk (v2) ``w,h`` are **whole percent 0–100** of width/height (or **null**; see below).
+**null** on ``w`` or ``h`` (not both): the widget is a **square**; side = the non-null value
+on its axis (``h`` % of height, or ``w`` % of width). **null** on ``x``/``y`` = center;
+negative ``x``/``y`` = inset from the right/bottom. In memory, fractions/``None``; v1: 0–1 floats.
 """
 from __future__ import annotations
 
@@ -56,11 +54,13 @@ def _elements_to_json_percent(
     for k, r in el.items():
         rx = r.get("x")
         ry = r.get("y")
+        rw = r.get("w")
+        rh = r.get("h")
         out[k] = {
             "x": None if rx is None else _axis_frac_to_pct_int(float(rx)),
             "y": None if ry is None else _axis_frac_to_pct_int(float(ry)),
-            "w": _frac_to_pct_int(r["w"]),
-            "h": _frac_to_pct_int(r["h"]),
+            "w": None if rw is None else _frac_to_pct_int(rw),
+            "h": None if rh is None else _frac_to_pct_int(rh),
             "z": int(r["z"]),
         }
     return out
@@ -70,6 +70,34 @@ def _parse_opt_axis(v: Any) -> Optional[float]:
     if v is None:
         return None
     return float(v)
+
+
+# For validating rectangles when w or h is null (square, side from non-null in own axis).
+LAYOUT_REF_W = 2000.0
+LAYOUT_REF_H = 1200.0
+
+
+def _effective_wh_for_rect_fits(
+    w: Optional[float], h: Optional[float], lim: float
+) -> Optional[tuple[float, float]]:
+    """
+    In memory, w/h are 0-1 (v1) or 0-100 (v2) per ``lim``. If one of w,h is None, build a
+    square: side from h (fraction of H) or w (fraction of W); the other is the other-axis
+    extent so _rect_fits can check bounds. Returns (w_eff, h_eff) in same ``lim`` units.
+    """
+    if w is not None and h is not None:
+        return (float(w), float(h))
+    if w is None and h is None:
+        return None
+    a = w if h is None else h
+    if a is None or a <= 0 or a > lim:
+        return None
+    if w is None and h is not None:
+        # h drives; w as fraction of W = (h/lim)*Href/Wref in same space as a fraction of lim
+        b = a * (LAYOUT_REF_H / LAYOUT_REF_W)
+        return (b, float(h))
+    b = a * (LAYOUT_REF_W / LAYOUT_REF_H)
+    return (float(w), b)
 
 
 def _rect_fits(
@@ -255,33 +283,53 @@ def _rect_ok_v1_fracs(r: dict[str, Any]) -> bool:
     if not all(k in r for k in ("x", "y", "w", "h", "z")):
         return False
     try:
-        w = float(r["w"])
-        h = float(r["h"])
+        w = _parse_opt_axis(r["w"])
+        h = _parse_opt_axis(r["h"])
     except (TypeError, ValueError):
+        return False
+    if w is None and h is None:
+        return False
+    if w is not None and (w <= 0 or w > 1.0):
+        return False
+    if h is not None and (h <= 0 or h > 1.0):
         return False
     try:
         x = _parse_opt_axis(r["x"])
         y = _parse_opt_axis(r["y"])
     except (TypeError, ValueError):
         return False
-    return _rect_fits(x, y, w, h, 1.0)
+    eff = _effective_wh_for_rect_fits(w, h, 1.0)
+    if eff is None:
+        return False
+    we, he = eff
+    return _rect_fits(x, y, we, he, 1.0)
 
 
 def _rect_ok_v2_percent(r: dict[str, Any]) -> bool:
-    """0–100; null x/y = center; negative = offset from R/B (same as v1 in percent space)."""
+    """0–100; null w/h = square; null x/y = center; negative = from R/B."""
     if not all(k in r for k in ("x", "y", "w", "h", "z")):
         return False
     try:
-        w = float(r["w"])
-        h = float(r["h"])
+        w = _parse_opt_axis(r["w"])
+        h = _parse_opt_axis(r["h"])
     except (TypeError, ValueError):
+        return False
+    if w is None and h is None:
+        return False
+    if w is not None and (w <= 0 or w > 100.0):
+        return False
+    if h is not None and (h <= 0 or h > 100.0):
         return False
     try:
         x = _parse_opt_axis(r["x"])
         y = _parse_opt_axis(r["y"])
     except (TypeError, ValueError):
         return False
-    return _rect_fits(x, y, w, h, 100.0)
+    eff = _effective_wh_for_rect_fits(w, h, 100.0)
+    if eff is None:
+        return False
+    we, he = eff
+    return _rect_fits(x, y, we, he, 100.0)
 
 
 def merge_ui_elements(
@@ -322,16 +370,16 @@ def merge_ui_elements(
                 "y": None
                 if v["y"] is None
                 else float(v["y"]) / 100.0,
-                "w": float(v["w"]) / 100.0,
-                "h": float(v["h"]) / 100.0,
+                "w": None if v.get("w") is None else float(v["w"]) / 100.0,
+                "h": None if v.get("h") is None else float(v["h"]) / 100.0,
                 "z": z_merged,
             }
         else:
             out[k] = {
                 "x": None if v["x"] is None else float(v["x"]),
                 "y": None if v["y"] is None else float(v["y"]),
-                "w": float(v["w"]),
-                "h": float(v["h"]),
+                "w": None if v.get("w") is None else float(v["w"]),
+                "h": None if v.get("h") is None else float(v["h"]),
                 "z": z_merged,
             }
     return out
@@ -349,10 +397,8 @@ def default_json_document() -> dict[str, Any]:
     return {
         "version": 2,
         "description": (
-            "w,h: 0-100% of width/height. "
-            "x: null = horizontal center; >=0 = from left; <0 = |x|% from right. "
-            "y: null = vertical center; >=0 = from top; <0 = |y|% from bottom. "
-            "z: stack order (lower = back). Keys x,y must be present (use null to center)."
+            "w,h: 0-100% of width/height; null w xor null h = square, side = non-null% on that axis. "
+            "x,y: null = center; <0 = from right/bottom. z: stack order. All keys x,y,w,h,z required."
         ),
         "elements": pct,
     }

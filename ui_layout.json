@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "w,h: 0-100% of width/height. x: null = horizontal center; >=0 = from left; <0 = |x|% from right. y: null = vertical center; >=0 = from top; <0 = |y|% from bottom. z: stack order (lower = back). Keys x,y must be present (use null to center).",
+  "description": "w,h: 0-100% of width/height; null w xor null h = square, side = non-null% on that axis. x,y: null = center; <0 = from right/bottom. z: stack order. All keys x,y,w,h,z required.",
   "elements": {
     "artwork": {
       "x": 32,
