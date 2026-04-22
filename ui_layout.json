@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "x,y,w,h are each 0-100 (whole percent, rounded) of the central widget size (width for x and w, height for y and h). z is stack order: lower = further back, higher = on top (ties: name order).",
+  "description": "w,h: 0-100% of width/height. x: >=0 = offset from left; <0 = |x|% from the right to this widget\u2019s right edge. y: >=0 = from top; <0 = |y|% from bottom to this widget\u2019s bottom. z: stack order (lower = back).",
   "elements": {
     "artwork": {
       "x": 32,

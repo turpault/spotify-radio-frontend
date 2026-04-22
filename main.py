@@ -4,8 +4,8 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path) defines each control as ``x, y, w, h`` in
-whole **percent** 0-100 of the main central widget (v2; v1 0-1 fractions still load).
+Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path): ``w,h`` are size as %; ``x,y`` are
+position (``x,y`` < 0 = inset from the right / bottom; see file ``description``).
 
 Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
@@ -889,6 +889,31 @@ class MainWindow(QMainWindow):
             path, "#c9a43a", int(getattr(self, "_history_tile_icon_px", _btn(88)))
         )
 
+    @staticmethod
+    def _layout_rect_from_fracs(
+        r: dict[str, Any], W: int, H: int
+    ) -> tuple[int, int, int, int]:
+        """Fracs: w,h>0. x>=0 = from left, y>=0 = from top; x<0 = |x| from right; y<0 = |y| from bottom."""
+        wf = float(r["w"])
+        hf = float(r["h"])
+        xf = float(r["x"])
+        yf = float(r["y"])
+        ww = max(1, int(wf * W))
+        hh = max(1, int(hf * H))
+        if xf >= 0.0:
+            x_px = int(xf * W)
+        else:
+            x_px = int(W * (1.0 - wf - abs(xf)))
+        if yf >= 0.0:
+            y_px = int(yf * H)
+        else:
+            y_px = int(H * (1.0 - hf - abs(yf)))
+        x_px = max(0, x_px)
+        y_px = max(0, y_px)
+        ww = min(ww, max(1, W - x_px))
+        hh = min(hh, max(1, H - y_px))
+        return (x_px, y_px, ww, hh)
+
     def _apply_ui_layout(self) -> None:
         """Size/position from self._ui_elements (fractions of central widget); z = stack order."""
         cw = self.centralWidget()
@@ -900,11 +925,8 @@ class MainWindow(QMainWindow):
             r = self._ui_elements.get(name)
             if r is None:
                 continue
-            x = int(float(r["x"]) * W)
-            y = int(float(r["y"]) * H)
-            ww = int(float(r["w"]) * W)
-            hh = int(float(r["h"]) * H)
-            w.setGeometry(x, y, max(1, ww), max(1, hh))
+            x_px, y_px, ww, hh = self._layout_rect_from_fracs(r, W, H)
+            w.setGeometry(x_px, y_px, ww, hh)
             if name.startswith("playlist_") and isinstance(w, HistoryTile):
                 w.refit(ww, hh)
             try:

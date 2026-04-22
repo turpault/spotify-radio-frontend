@@ -1,7 +1,9 @@
 """
-Load UI layout for MainWindow. On disk (``version`` 2) ``x,y,w,h`` are **whole
-percent 0–100** of the central widget (rounded). In memory, ``load_ui_layout()``
-feeds 0–1 fractions to the window. Version 1 files used 0–1 floats and remain supported.
+Load UI layout for MainWindow. On disk (v2) ``w,h`` and positive ``x,y`` are **whole
+percent 0–100** of the central (rounded). **Negative** ``x`` or ``y`` is the distance
+from the right or bottom edge to the widget’s right or bottom, as a **positive** percent
+(value stored negative in the file, e.g. ``-5`` = 5% from the edge). In memory,
+``load_ui_layout()`` feeds fractions to the window. Version 1 uses 0–1 floats (same sign rule).
 """
 from __future__ import annotations
 
@@ -37,8 +39,13 @@ def _n(W: float, H: float, x: float, y: float, w: float, h: float) -> dict[str, 
 
 
 def _frac_to_pct_int(v: float) -> int:
-    """Round fraction in [0,1] to nearest whole percent in [0, 100]."""
+    """Round positive fraction in [0,1] to nearest whole percent in [0, 100] (w, h)."""
     return int(max(0, min(100, round(float(v) * 100.0))))
+
+
+def _axis_frac_to_pct_int(v: float) -> int:
+    """x / y: round to whole percent; negative = anchor to right (x) or bottom (y). Clamped to ±100."""
+    return int(max(-100, min(100, round(float(v) * 100.0))))
 
 
 def _elements_to_json_percent(
@@ -47,13 +54,30 @@ def _elements_to_json_percent(
     out: dict[str, dict[str, int]] = {}
     for k, r in el.items():
         out[k] = {
-            "x": _frac_to_pct_int(r["x"]),
-            "y": _frac_to_pct_int(r["y"]),
+            "x": _axis_frac_to_pct_int(r["x"]),
+            "y": _axis_frac_to_pct_int(r["y"]),
             "w": _frac_to_pct_int(r["w"]),
             "h": _frac_to_pct_int(r["h"]),
             "z": int(r["z"]),
         }
     return out
+
+
+def _rect_fits(
+    x: float, y: float, w: float, h: float, lim: float
+) -> bool:
+    """lim is 1.0 (frac) or 100.0 (percent). Negative x/y = inset from R/B: |x|+w <= lim, |y|+h <= lim."""
+    if w <= 0 or h <= 0 or w > lim or h > lim:
+        return False
+    if x >= 0 and x + w > lim + 0.5:
+        return False
+    if x < 0 and w + abs(x) > lim + 0.5:
+        return False
+    if y >= 0 and y + h > lim + 0.5:
+        return False
+    if y < 0 and h + abs(y) > lim + 0.5:
+        return False
+    return True
 
 
 # Stacking: lower z is painted first (further back); higher z is on top. Ties: sorted by name.
@@ -224,15 +248,11 @@ def _rect_ok_v1_fracs(r: dict[str, Any]) -> bool:
         h = float(r["h"])
     except (KeyError, TypeError, ValueError):
         return False
-    if w <= 0 or h <= 0:
-        return False
-    if not (-0.01 <= x <= 1.01 and -0.01 <= y <= 1.01):
-        return False
-    return x + w <= 1.001 and y + h <= 1.001
+    return _rect_fits(x, y, w, h, 1.0)
 
 
 def _rect_ok_v2_percent(r: dict[str, Any]) -> bool:
-    """0–100 (whole or fractional percent); same semantics as v1 in percent space."""
+    """0–100; negative x = offset from right, negative y = from bottom (same as v1 in percent)."""
     try:
         x = float(r["x"])
         y = float(r["y"])
@@ -240,11 +260,7 @@ def _rect_ok_v2_percent(r: dict[str, Any]) -> bool:
         h = float(r["h"])
     except (KeyError, TypeError, ValueError):
         return False
-    if w <= 0 or h <= 0:
-        return False
-    if not (-0.5 <= x <= 100.5 and -0.5 <= y <= 100.5):
-        return False
-    return x + w <= 100.5 and y + h <= 100.5
+    return _rect_fits(x, y, w, h, 100.0)
 
 
 def merge_ui_elements(
@@ -308,9 +324,10 @@ def default_json_document() -> dict[str, Any]:
     return {
         "version": 2,
         "description": (
-            "x,y,w,h are each 0-100 (whole percent, rounded) of the central "
-            "widget size (width for x and w, height for y and h). "
-            "z is stack order: lower = further back, higher = on top (ties: name order)."
+            "w,h: 0-100% of width/height. "
+            "x: >=0 = offset from left; <0 = |x|% from the right to this widget’s right edge. "
+            "y: >=0 = from top; <0 = |y|% from bottom to this widget’s bottom. "
+            "z: stack order (lower = back)."
         ),
         "elements": pct,
     }
