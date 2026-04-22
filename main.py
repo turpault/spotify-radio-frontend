@@ -587,16 +587,6 @@ class MainWindow(QMainWindow):
         prog.addWidget(self.duration_label)
         root.addLayout(prog)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.NoFrame)
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background-color: #5c4a38;")
-        root.addWidget(sep)
-
-        hint = QLabel("API: " + self._cfg.base)
-        hint.setStyleSheet(f"color: #5a5048; font-size: {_s(12)}px;")
-        root.addWidget(hint)
-
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
         QShortcut(QKeySequence(Qt.Key.Key_Left), self, activated=self._on_prev)
