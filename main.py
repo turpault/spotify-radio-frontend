@@ -54,6 +54,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QStackedLayout,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -467,6 +468,12 @@ class MainWindow(QMainWindow):
             f"""
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
             QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
+            QFrame#artTransportBar {{
+                background-color: rgba(255, 250, 240, 0.16);
+                border: none;
+                border-top: 1px solid rgba(220, 200, 170, 0.2);
+                border-radius: 0 0 {b(10)}px {b(10)}px;
+            }}
             QPushButton {{
                 background-color: #3a2e22;
                 color: #f5ecd8;
@@ -569,27 +576,22 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(_m, _m, _m, _m)
         root.setSpacing(_s(18))
 
+        _trans_h = _btn(50)
+        _transPad = _s(8)
+        self._art_transport_h = 2 * _transPad + _trans_h
+        # Minimum width: padding + 4 equal buttons + 3 spacings (must fit in column with cover).
+        self._art_transport_min_w = 2 * _transPad + 4 * _btn(72) + 3 * _s(4)
+
         self.prev_btn = QPushButton("⏮")
-        self.prev_btn.setFixedSize(_btn(88), _btn(88))
-        self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn = QPushButton("⏭")
-        self.next_btn.setFixedSize(_btn(88), _btn(88))
-        self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30 = QPushButton("−30s")
         self.seek_fwd_30 = QPushButton("+30s")
-        for b in (self.seek_back_30, self.seek_fwd_30):
-            b.setMinimumSize(_btn(88), _btn(50))
+        for b in (self.prev_btn, self.next_btn, self.seek_back_30, self.seek_fwd_30):
+            b.setFixedSize(_btn(72), _trans_h)
+        self.prev_btn.clicked.connect(self._on_prev)
+        self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30.clicked.connect(self._on_seek_back_30)
         self.seek_fwd_30.clicked.connect(self._on_seek_fwd_30)
-
-        left_nav = QVBoxLayout()
-        left_nav.setSpacing(_btn(10))
-        left_nav.addWidget(self.prev_btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        left_nav.addWidget(self.seek_back_30, 0, Qt.AlignmentFlag.AlignHCenter)
-        right_nav = QVBoxLayout()
-        right_nav.setSpacing(_btn(10))
-        right_nav.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        right_nav.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # Lucide volume-2 / volume-1 (see icons/ATTRIBUTION.txt) — up = louder, down = quieter.
         self.volume_up = QPushButton()
@@ -612,23 +614,48 @@ class MainWindow(QMainWindow):
         vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addStretch(1)
 
-        art_row = QHBoxLayout()
-        art_row.setSpacing(_btn(6))
-        art_row.setContentsMargins(0, 0, 0, 0)
-        # Top-align: do not V-center nav columns in the row — when the cover is resized, row
-        # height changes and V-center would move prev/next vertically. Top keeps Y stable.
-        # QBoxLayout.addLayout() has no alignment arg in PyQt6; wrap in QWidget and addWidget.
-        _art_top = Qt.AlignmentFlag.AlignTop
-        _art_in_cell = _art_top | Qt.AlignmentFlag.AlignHCenter
-        left_nav_w = QWidget()
-        left_nav_w.setLayout(left_nav)
-        right_nav_w = QWidget()
-        right_nav_w.setLayout(right_nav)
-        art_row.addWidget(left_nav_w, 0, _art_top)
         self.album_art = AlbumArtLabel(749)
         self.album_art.clicked.connect(self._on_playpause)
-        art_row.addWidget(self.album_art, 1, _art_in_cell)
-        art_row.addWidget(right_nav_w, 0, _art_top)
+
+        self._art_transport = QFrame()
+        self._art_transport.setObjectName("artTransportBar")
+        tlay = QHBoxLayout(self._art_transport)
+        tlay.setContentsMargins(_transPad, _transPad, _transPad, _transPad)
+        tlay.setSpacing(_s(4))
+        tlay.addWidget(self.prev_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        tlay.addWidget(self.seek_back_30, 0, Qt.AlignmentFlag.AlignVCenter)
+        tlay.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignVCenter)
+        tlay.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        tlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Pass clicks through the empty region so play/pause on the cover still works.
+        self._art_top_clear = QWidget()
+        self._art_top_clear.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._art_top_clear.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self._art_over = QWidget()
+        ovl = QVBoxLayout(self._art_over)
+        ovl.setContentsMargins(0, 0, 0, 0)
+        ovl.setSpacing(0)
+        ovl.addWidget(self._art_top_clear, 1)
+        ovl.addWidget(self._art_transport, 0)
+
+        self._art_host = QWidget()
+        _sl = QStackedLayout(self._art_host)
+        _sl.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        _sl.setContentsMargins(0, 0, 0, 0)
+        _sl.addWidget(self.album_art)
+        _sl.addWidget(self._art_over)
+
+        art_row = QHBoxLayout()
+        art_row.setSpacing(0)
+        art_row.setContentsMargins(0, 0, 0, 0)
+        art_row.addStretch(1)
+        art_row.addWidget(self._art_host, 0, Qt.AlignmentFlag.AlignHCenter)
+        art_row.addStretch(1)
 
         _meta_align = (
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
@@ -869,27 +896,32 @@ class MainWindow(QMainWindow):
         """Largest square that fits: min(available width, art row height) × ART_SIZE_MULT, capped."""
         w = max(400, self.width())
         h = max(400, self.height())
-        # Match _build_ui scaled margins, gaps, and transport column width (device pixels)
+        # Match _build_ui: margins, hero gaps, side rails, playlist columns (no side nav columns)
         root_m = _s(24) * 2
         hero_gaps = _btn(20) * 4
         side_rails = self.vol_rail.width() + self.mode_rail.width()
         p_cols = 2 * int(getattr(self, "_playlist_col_w", 0) or 0)
-        navcol = _btn(96)
-        max_w = w - root_m - hero_gaps - side_rails - 2 * navcol - p_cols
+        max_w = w - root_m - hero_gaps - side_rails - p_cols
         # root: main_hero, spacing, progress bar row, spacings, 1px sep
         sp = _s(18)
         below_main = sp + _s(36) + sp + 1 + sp
         main_hero_h = h - root_m - below_main
         info_h = self._info_area_height(main_hero_h)
+        # Transport is overlaid on the cover (no extra row height). Cell must be ≥ bar min width.
         art_max_h = main_hero_h - self._center_vgap - info_h
         art_max_h = max(100, art_max_h)
         fit = int(max(0, min(max_w, art_max_h)))
         side = int(round(fit * float(ART_SIZE_MULT)))
+        bmin = int(getattr(self, "_art_transport_min_w", 0) or 0)
+        if bmin:
+            side = max(side, bmin)
         side = min(side, int(max_w), int(art_max_h), ART_SIDE_MAX)
         return max(120, side)
 
     def _reflow_album_size(self) -> None:
-        self.album_art.set_square_size(self._compute_album_side())
+        s = self._compute_album_side()
+        self.album_art.set_square_size(s)
+        self._art_host.setFixedSize(s, s)
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
