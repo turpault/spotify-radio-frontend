@@ -1148,6 +1148,19 @@ class MainWindow(QMainWindow):
             self._art_row_wrap.setFixedHeight(w)
         self._art_frame.updateGeometry()
         self._reflow_playlist_tiles()
+        self._reflow_artist_album_offset()
+
+    def _reflow_artist_album_offset(self) -> None:
+        """Push artist + album down by 3% of the content area height (inside root margins)."""
+        central = self.centralWidget()
+        if central is None:
+            return
+        rm = int(getattr(self, "_root_margin", _s(24)))
+        H = int(central.height()) - 2 * rm
+        if H < 1:
+            return
+        pad = int(round(0.03 * H))
+        self.artist_label.setContentsMargins(0, pad, 0, 0)
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
