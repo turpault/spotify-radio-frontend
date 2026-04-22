@@ -615,11 +615,15 @@ class MainWindow(QMainWindow):
         art_row = QHBoxLayout()
         art_row.setSpacing(_btn(6))
         art_row.setContentsMargins(0, 0, 0, 0)
-        art_row.addLayout(left_nav, 0)
+        # Top-align: do not V-center nav columns in the row — when the cover is resized, row
+        # height changes and V-center would move prev/next vertically. Top keeps Y stable.
+        _art_top = Qt.AlignmentFlag.AlignTop
+        _art_in_cell = _art_top | Qt.AlignmentFlag.AlignHCenter
+        art_row.addLayout(left_nav, 0, _art_top)
         self.album_art = AlbumArtLabel(624)
         self.album_art.clicked.connect(self._on_playpause)
-        art_row.addWidget(self.album_art, 1, Qt.AlignmentFlag.AlignCenter)
-        art_row.addLayout(right_nav, 0)
+        art_row.addWidget(self.album_art, 1, _art_in_cell)
+        art_row.addLayout(right_nav, 0, _art_top)
 
         _meta_align = (
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
