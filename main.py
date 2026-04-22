@@ -28,7 +28,6 @@ from PyQt6.QtNetwork import QAbstractSocket, QNetworkAccessManager, QNetworkRepl
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
@@ -278,24 +277,28 @@ class MainWindow(QMainWindow):
             }
             QPushButton#PlayDial:hover { background-color: #5c4d40; border-color: #dcc060; }
             QPushButton#PlayDial:pressed { background-color: #3d3228; }
-            QCheckBox {
-                font-size: 16px;
-                spacing: 10px;
-                color: #d4c4a8;
-                font-family: Palatino, Georgia, serif;
+            QPushButton#ModeToggle {
+                min-height: 52px;
+                min-width: 152px;
+                font-size: 17px;
+                font-weight: bold;
+                border-radius: 12px;
+                padding: 12px 16px;
+                color: #a89880;
+                background-color: #3d3228;
+                border: 2px solid #5a4a38;
             }
-            QCheckBox::indicator {
-                width: 28px;
-                height: 28px;
-                border-radius: 5px;
-                border: 2px solid #6b5344;
-                background: #2a2218;
+            QPushButton#ModeToggle:checked {
+                color: #f0e6d4;
+                background-color: #5a4820;
+                border: 3px solid #c9a43a;
             }
-            QCheckBox::indicator:checked {
-                background: #8a6a28;
-                border: 2px solid #c9a43a;
+            QPushButton#ModeToggle:hover { border-color: #9a7b4a; }
+            QPushButton#ModeToggle:checked:hover {
+                background-color: #6a5628;
+                border-color: #dcc060;
             }
-            QCheckBox::indicator:hover { border-color: #9a7b4a; }
+            QPushButton#ModeToggle:pressed { background-color: #332a20; }
             """
         )
         self.setWindowFlags(
@@ -411,15 +414,18 @@ class MainWindow(QMainWindow):
         root.addLayout(seek)
 
         toggles = QHBoxLayout()
-        self.shuffle_check = QCheckBox("Shuffle")
-        self.repeat_track_check = QCheckBox("Repeat track")
-        self.repeat_context_check = QCheckBox("Repeat context")
-        self.shuffle_check.toggled.connect(self._on_shuffle)
-        self.repeat_track_check.toggled.connect(self._on_repeat_track)
-        self.repeat_context_check.toggled.connect(self._on_repeat_context)
-        toggles.addWidget(self.shuffle_check)
-        toggles.addWidget(self.repeat_track_check)
-        toggles.addWidget(self.repeat_context_check)
+        self.shuffle_toggle = QPushButton("Shuffle")
+        self.repeat_track_toggle = QPushButton("Repeat track")
+        self.repeat_context_toggle = QPushButton("Repeat context")
+        for b in (self.shuffle_toggle, self.repeat_track_toggle, self.repeat_context_toggle):
+            b.setObjectName("ModeToggle")
+            b.setCheckable(True)
+        self.shuffle_toggle.toggled.connect(self._on_shuffle)
+        self.repeat_track_toggle.toggled.connect(self._on_repeat_track)
+        self.repeat_context_toggle.toggled.connect(self._on_repeat_context)
+        toggles.addWidget(self.shuffle_toggle)
+        toggles.addWidget(self.repeat_track_toggle)
+        toggles.addWidget(self.repeat_context_toggle)
         toggles.addStretch()
         root.addLayout(toggles)
 
@@ -518,18 +524,18 @@ class MainWindow(QMainWindow):
         elif et in ("shuffle_context", "repeat_context", "repeat_track") and isinstance(data, dict):
             v = data.get("value")
             if et == "shuffle_context" and isinstance(v, bool):
-                self._block_toggle(self.shuffle_check, v)
+                self._block_toggle(self.shuffle_toggle, v)
             elif et == "repeat_context" and isinstance(v, bool):
-                self._block_toggle(self.repeat_context_check, v)
+                self._block_toggle(self.repeat_context_toggle, v)
             elif et == "repeat_track" and isinstance(v, bool):
-                self._block_toggle(self.repeat_track_check, v)
+                self._block_toggle(self.repeat_track_toggle, v)
         if et in ("metadata", "seek", "playing", "paused", "not_playing", "will_play", "volume", "active", "inactive"):
             self._request_status_bg()
 
-    def _block_toggle(self, box: QCheckBox, on: bool) -> None:
-        box.blockSignals(True)
-        box.setChecked(on)
-        box.blockSignals(False)
+    def _block_toggle(self, btn: QPushButton, on: bool) -> None:
+        btn.blockSignals(True)
+        btn.setChecked(on)
+        btn.blockSignals(False)
 
     def _on_tick(self) -> None:
         if not self._is_playing or self._duration_ms <= 0:
@@ -575,15 +581,15 @@ class MainWindow(QMainWindow):
         name = st.get("device_name") or st.get("device_id") or "device"
         uname = st.get("username") or ""
         self._block_toggle(
-            self.shuffle_check,
+            self.shuffle_toggle,
             bool(st.get("shuffle_context")),
         )
         self._block_toggle(
-            self.repeat_context_check,
+            self.repeat_context_toggle,
             bool(st.get("repeat_context")),
         )
         self._block_toggle(
-            self.repeat_track_check,
+            self.repeat_track_toggle,
             bool(st.get("repeat_track")),
         )
         st_line = name + (f" · {uname}" if uname else "")
