@@ -474,7 +474,7 @@ class MainWindow(QMainWindow):
         )
         self._build_ui()
         self._wire_shortcuts()
-        QTimer.singleShot(0, self._reflow_album_size)
+        QTimer.singleShot(0, self._layout_reflow)
         self._apply_history_tiles()
 
         self._ws = QWebSocket()
@@ -639,7 +639,7 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         _m = _s(24)
         root.setContentsMargins(_m, _m, _m, _m)
-        root.setSpacing(_s(18))
+        # Spacing 0: vertical bands are sized by _apply_vertical_proportions (5+65+20+10%).
 
         _trans_h = _btn(50)
         _transPad = _s(8)
@@ -777,15 +777,17 @@ class MainWindow(QMainWindow):
 
         self.info_block.setSizePolicy(
             QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Preferred,
         )
         self.info_block.setMinimumWidth(0)
 
+        # Center column = album only (metadata lives in its own band below the hero).
         center = QVBoxLayout()
-        self._center_vgap = _s(14)
-        center.setSpacing(self._center_vgap)
-        center.addWidget(self._art_row_wrap, 1)
-        center.addWidget(self.info_block, 0)
+        center.setContentsMargins(0, 0, 0, 0)
+        center.setSpacing(0)
+        center.addStretch(1)
+        center.addWidget(self._art_row_wrap, 0, Qt.AlignmentFlag.AlignHCenter)
+        center.addStretch(1)
         # QWidget wrapper so the hero row can shrink horizontally (layout min width
         # is not forced by one long sub_label line; right playlist column stays visible).
         self._center_column = QWidget()
@@ -847,12 +849,7 @@ class MainWindow(QMainWindow):
         main_hero.setStretch(2, 1)
         main_hero.setStretch(3, 0)
         main_hero.setStretch(4, 0)
-        root.addLayout(main_hero, 1)
 
-        self._volume_overlay = VolumeOverlay(self)
-        self._volume_overlay.hide()
-
-        prog = QHBoxLayout()
         self.elapsed_label = QLabel("0:00")
         _time_style = (
             "color: #d4c4a8; font-family: 'Courier New', Courier, monospace; "
@@ -879,10 +876,59 @@ class MainWindow(QMainWindow):
         )
         self.duration_label = QLabel("0:00")
         self.duration_label.setStyleSheet(_time_style)
+        prog = QHBoxLayout()
         prog.addWidget(self.elapsed_label)
         prog.addWidget(self.progress_bar, 1)
         prog.addWidget(self.duration_label)
-        root.addLayout(prog)
+
+        # Vertical bands: 5% top margin, 65% hero (art + rails), 20% track text, 10% progress.
+        self._root_margin = _m
+        self._section_top = QWidget()
+        self._section_top.setObjectName("sectionTop")
+        self._section_hero = QWidget()
+        self._section_hero.setObjectName("sectionHero")
+        self._section_info = QWidget()
+        self._section_info.setObjectName("sectionInfo")
+        self._section_prog = QWidget()
+        self._section_prog.setObjectName("sectionProg")
+        _sec_pol = QSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        for sec in (
+            self._section_top,
+            self._section_hero,
+            self._section_info,
+            self._section_prog,
+        ):
+            sec.setSizePolicy(_sec_pol)
+
+        hero_inner = QVBoxLayout(self._section_hero)
+        hero_inner.setContentsMargins(0, 0, 0, 0)
+        hero_inner.setSpacing(0)
+        hero_inner.addLayout(main_hero, 1)
+
+        info_inner = QVBoxLayout(self._section_info)
+        info_inner.setContentsMargins(0, 0, 0, 0)
+        info_inner.setSpacing(0)
+        info_inner.addStretch(1)
+        info_inner.addWidget(self.info_block, 0)
+        info_inner.addStretch(1)
+
+        prog_inner = QVBoxLayout(self._section_prog)
+        prog_inner.setContentsMargins(0, 0, 0, 0)
+        prog_inner.setSpacing(0)
+        prog_inner.addStretch(1)
+        prog_inner.addLayout(prog)
+        prog_inner.addStretch(1)
+
+        root.setSpacing(0)
+        root.addWidget(self._section_top)
+        root.addWidget(self._section_hero)
+        root.addWidget(self._section_info)
+        root.addWidget(self._section_prog)
+
+        self._volume_overlay = VolumeOverlay(self)
+        self._volume_overlay.hide()
 
     def _load_playlist_tile_icon(self) -> QIcon:
         path = _ICONS_DIR / "list-music.svg"
@@ -941,72 +987,85 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._volume_overlay is not None:
             self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
-        # One deferred reflow: layout has the center column width, info sizeHint is stable.
+        self._apply_vertical_proportions()
         QTimer.singleShot(0, self._reflow_album_size)
 
-    def _info_area_height(self, main_hero_h: int) -> int:
-        """
-        Height reserved for title/artist/album row. Uses sizeHint only so the art frame
-        side does not oscillate (live + hint mixed with deferred reflow caused clipping).
-        """
-        self.info_block.updateGeometry()
-        w = int(self.info_block.width())
-        if w < 8 and self.centralWidget() is not None:
-            w = max(200, int(self.centralWidget().width() * 0.35))
-        hint = int(self.info_block.sizeHint().height())
-        raw = int(hint) if hint > 0 else 72
-        # Do not let metadata take most of the column (stretches in old layout could do that).
-        cap = int(max(120, min(main_hero_h * 0.45, 720)))
-        return max(72, min(raw, cap))
+    def _apply_vertical_proportions(self) -> None:
+        """5% / 65% / 20% / 10% of client height inside root margins (top inset + bands)."""
+        central = self.centralWidget()
+        if central is None:
+            return
+        rm = int(getattr(self, "_root_margin", _s(24)))
+        H = int(central.height()) - 2 * rm
+        if H < 80:
+            return
+        h5 = int(round(H * 0.05))
+        h65 = int(round(H * 0.65))
+        h20 = int(round(H * 0.20))
+        h10 = H - h5 - h65 - h20
+        if h10 < 1:
+            h10 = 1
+        for name, hh in (
+            ("_section_top", h5),
+            ("_section_hero", h65),
+            ("_section_info", h20),
+            ("_section_prog", h10),
+        ):
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setFixedHeight(int(hh))
+
+    def _layout_reflow(self) -> None:
+        self._apply_vertical_proportions()
+        self._reflow_album_size()
 
     def _compute_album_side(self) -> int:
-        """Largest square W for the W×W art frame (cover + in-frame bottom transport)."""
-        w = max(400, self.width())
-        h = max(400, self.height())
-        # Match _build_ui: margins, hero gaps, side rails, playlist columns (no side nav columns)
-        root_m = _s(24) * 2
-        hero_gaps = _btn(20) * 4
+        """Largest square for art from hero band height and center column width."""
         side_rails = self.vol_rail.width() + self.mode_rail.width()
         p_cols = 2 * int(getattr(self, "_playlist_col_w", 0) or 0)
-        max_w = w - root_m - hero_gaps - side_rails - p_cols
-        # root: main_hero, spacing, progress bar row, spacings, 1px sep
-        sp = _s(18)
-        below_main = sp + _s(36) + sp + 1 + sp
-        main_hero_h = h - root_m - below_main
-        info_h = self._info_area_height(main_hero_h)
-        art_max_h = main_hero_h - self._center_vgap - info_h
-        art_max_h = max(100, art_max_h)
-        fit = int(max(0, min(max_w, art_max_h)))
+        win_w = max(400, self.width())
+        root_m = _s(24) * 2
+        hero_gaps = _btn(20) * 4
+        max_w = int(win_w - root_m - hero_gaps - side_rails - p_cols)
+
+        hero_h = 0
+        sh = getattr(self, "_section_hero", None)
+        if sh is not None and sh.height() > 0:
+            hero_h = int(sh.height())
+        else:
+            central = self.centralWidget()
+            if central is not None and central.height() > 0:
+                rm = int(getattr(self, "_root_margin", _s(24)))
+                H = int(central.height()) - 2 * rm
+                hero_h = max(100, int(round(H * 0.65)))
+            else:
+                hero_h = int(max(400, self.height()) * 0.4)
+
+        ccw = 0
+        cc = getattr(self, "_center_column", None)
+        if cc is not None and cc.width() > 0:
+            ccw = int(cc.width())
+
+        cap_w = min(max_w, hero_h) if ccw == 0 else min(max_w, hero_h, ccw)
+        fit = int(max(0, cap_w))
         side = int(round(fit * float(ART_SIZE_MULT)))
         bmin = int(getattr(self, "_art_transport_min_w", 0) or 0)
         if bmin:
             side = max(side, bmin)
-        side = min(side, int(max_w), int(art_max_h), ART_SIDE_MAX)
-        return max(120, side)
+        cap_h = int(hero_h)
+        cap_w2 = int(ccw) if ccw > 0 else int(max_w)
+        side = min(int(side), int(max_w), cap_h, cap_w2, int(ART_SIDE_MAX))
+        return max(120, int(side))
 
     def _reflow_album_size(self) -> None:
-        w0 = self._compute_album_side()
-        w = int(w0)
-        # The analytic formula for main_hero_h can be larger than the real center
-        # column, so w can exceed the row height  Qt compresses to a short wide band
-        # (clipped art). Clamp to the actual center & vertical room for the art row.
-        cc = getattr(self, "_center_column", None)
-        if cc is not None:
-            cc.updateGeometry()
-            self.info_block.updateGeometry()
-            ccw = int(cc.width())
-            cch = int(cc.height())
-            if cch > 0 and ccw > 0:
-                ih = self._info_area_height(cch)
-                room = cch - int(self._center_vgap) - int(ih)
-                room = max(64, min(room, cch - 1))
-                w = min(int(w0), int(ccw), int(room), int(ART_SIDE_MAX))
-        w = max(120, int(w))
+        w = int(self._compute_album_side())
+        w = max(120, min(int(w), int(ART_SIDE_MAX)))
+        sh = getattr(self, "_section_hero", None)
+        if sh is not None and sh.height() > 0:
+            w = min(int(w), int(sh.height()))
         bar_h = int(getattr(self, "_art_transport_h", 0) or 0)
         self._art_frame.setFixedSize(w, w)
         self._art_transport.setFixedSize(w, bar_h)
-        # art viewport set in ArtworkFrameHost.resizeEvent; sync once in case
-        # setFixedSize did not change geometry (e.g. same w).
         self.album_art.set_art_viewport(w, w)
         if getattr(self, "_art_row_wrap", None) is not None:
             self._art_row_wrap.setFixedHeight(w)
