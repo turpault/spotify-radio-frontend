@@ -12,6 +12,7 @@ import json
 import logging
 import sys
 import threading
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any, Optional
@@ -53,7 +54,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from gls_client import GlsApiError, GlsConfig, get_json, post_json
+from gls_client import GlsApiError, GlsConfig, get_json, get_me_playlist_names, post_json
 from icon_utils import svg_colored_icon
 
 _log = logging.getLogger("gls-frontend")
@@ -318,6 +319,9 @@ class MainWindow(QMainWindow):
         self._hud_hide_timer.setInterval(1800)
         self._hud_hide_timer.timeout.connect(self._begin_hud_fade)
         self._hud_fade: Optional[QPropertyAnimation] = None
+        # refresh Spotify playlist names (via daemon /web-api) at most this often
+        self._playlists_min_interval_s = 90.0
+        self._playlists_last_fetch: float = time.monotonic()
         # repeat: 0=off, 1=one track, 2=whole context
         self._repeat_mode: int = 0
         self._is_playing = False
@@ -334,6 +338,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._wire_shortcuts()
         QTimer.singleShot(0, self._reflow_album_size)
+        QTimer.singleShot(400, self._request_playlists_bg)
 
         self._ws = QWebSocket()
         self._ws.connected.connect(self._on_ws_connected)
@@ -557,11 +562,20 @@ class MainWindow(QMainWindow):
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
+        # Far left / far right: six playlist name slots (Spotify Web API via go-librespot /web-api).
+        self._playlist_col_w = _s(200)
+        self._playlist_name_labels: list[QLabel] = []
+        self._playlist_left, labs_l = self._make_playlist_column()
+        self._playlist_right, labs_r = self._make_playlist_column()
+        self._playlist_name_labels = labs_l + labs_r
+
         main_hero = QHBoxLayout()
         main_hero.setSpacing(_btn(20))
+        main_hero.addWidget(self._playlist_left, 0, Qt.AlignmentFlag.AlignTop)
         main_hero.addWidget(self.vol_rail, 0, Qt.AlignmentFlag.AlignTop)
         main_hero.addLayout(center, 1)
         main_hero.addWidget(self.mode_rail, 0, Qt.AlignmentFlag.AlignTop)
+        main_hero.addWidget(self._playlist_right, 0, Qt.AlignmentFlag.AlignTop)
         root.addLayout(main_hero, 1)
 
         self._volume_overlay = VolumeOverlay(self)
@@ -598,6 +612,30 @@ class MainWindow(QMainWindow):
         prog.addWidget(self.progress_bar, 1)
         prog.addWidget(self.duration_label)
         root.addLayout(prog)
+
+    def _make_playlist_column(self) -> tuple[QWidget, list[QLabel]]:
+        w = QWidget()
+        w.setFixedWidth(self._playlist_col_w)
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, _s(2), 0, 0)
+        v.setSpacing(_s(8))
+        pl_style = (
+            f"color: #b8a888; font-size: {_s(14)}px; "
+            "font-family: Palatino, Georgia, serif;"
+        )
+        labels: list[QLabel] = []
+        for _ in range(3):
+            lb = QLabel("—")
+            lb.setWordWrap(True)
+            lb.setAlignment(
+                Qt.AlignmentFlag.AlignHCenter
+                | Qt.AlignmentFlag.AlignTop
+            )
+            lb.setStyleSheet(pl_style)
+            labels.append(lb)
+            v.addWidget(lb, 0)
+        v.addStretch(1)
+        return w, labels
 
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
@@ -642,10 +680,11 @@ class MainWindow(QMainWindow):
         h = max(400, self.height())
         # Match _build_ui scaled margins, gaps, and transport column width (device pixels)
         root_m = _s(24) * 2
-        hero_gaps = _btn(20) * 2
+        hero_gaps = _btn(20) * 4
         side_rails = self.vol_rail.width() + self.mode_rail.width()
+        p_cols = 2 * int(getattr(self, "_playlist_col_w", 0) or 0)
         navcol = _btn(96)
-        max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
+        max_w = w - root_m - hero_gaps - side_rails - 2 * navcol - p_cols
         # root: main_hero, spacing, progress bar row, spacings, 1px sep
         sp = _s(18)
         below_main = sp + _s(36) + sp + 1 + sp
@@ -748,6 +787,34 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True, name="gls-status").start()
 
+    def _request_playlists_bg(self) -> None:
+        def work() -> None:
+            try:
+                names = get_me_playlist_names(self._cfg, limit=6)
+            except GlsApiError as e:
+                _log.warning("playlists: %s", e)
+                QTimer.singleShot(0, partial(self._on_playlists_failed))
+                return
+            QTimer.singleShot(0, partial(self._on_playlists_ok, names))
+
+        threading.Thread(
+            target=work, daemon=True, name="gls-playlists"
+        ).start()
+
+    @pyqtSlot()
+    def _on_playlists_failed(self) -> None:
+        for lab in self._playlist_name_labels:
+            lab.setText("—")
+
+    @pyqtSlot(object)
+    def _on_playlists_ok(self, names: object) -> None:
+        if not isinstance(names, list):
+            names = []
+        name_strs = [str(x) for x in names if x is not None]
+        name_strs = (name_strs + ["—"] * 6)[:6]
+        for i, lab in enumerate(self._playlist_name_labels):
+            lab.setText(name_strs[i])
+
     @pyqtSlot(str)
     def _on_status_failed(self, msg: str) -> None:
         self.sub_label.setText("Cannot reach go-librespot: " + msg)
@@ -764,6 +831,11 @@ class MainWindow(QMainWindow):
 
         if not isinstance(st, dict):
             return
+
+        now = time.monotonic()
+        if now - self._playlists_last_fetch >= self._playlists_min_interval_s:
+            self._playlists_last_fetch = now
+            self._request_playlists_bg()
 
         self._set_shuffle_checked(bool(st.get("shuffle_context")))
         self._sync_repeat_mode(

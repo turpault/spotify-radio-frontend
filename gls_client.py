@@ -93,3 +93,27 @@ def post_json(
     if code not in (200, 201, 204):
         text = raw.decode("utf-8", errors="replace")
         raise GlsApiError(f"POST {path}: HTTP {code} {text[:500]}")
+
+
+def get_me_playlist_names(
+    cfg: Optional[GlsConfig] = None, *, limit: int = 6, offset: int = 0
+) -> list[str]:
+    """
+    Current user's playlist names via go-librespot's /web-api/ proxy (session auth, not OAuth).
+
+    https://github.com/devgianlu/go-librespot — GET /web-api/* forwards to Spotify Web API.
+    """
+    c = cfg or GlsConfig.from_env()
+    path = f"/web-api/v1/me/playlists?limit={int(limit)}&offset={int(offset)}"
+    data = get_json(path, cfg=c)
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    out: list[str] = []
+    for it in items:
+        if isinstance(it, dict):
+            n = it.get("name")
+            out.append(str(n) if n is not None else "—")
+    return out
