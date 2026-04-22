@@ -410,6 +410,15 @@ class HistoryTile(QWidget):
         self._fallback_icon = tile_icon
         self._apply_empty()
 
+    def refit(self, col_w: int, btn_side: int) -> None:
+        """Size tile and icon from hero height so a column of four does not clip."""
+        s = int(max(8, btn_side))
+        cw = int(max(8, col_w))
+        self.setFixedSize(cw, s)
+        isz = max(8, int(s * 0.78))
+        self._btn.setIconSize(QSize(isz, isz))
+        self._btn.setFixedSize(s, s)
+
     def _on_btn(self) -> None:
         u = (self._play_uri or "").strip()
         if u.startswith("spotify:"):
@@ -535,6 +544,8 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             f"""
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
+            /* Cover sits under this overlay; unnamed QWidget matched the base rule and hid art. */
+            QWidget#artOver, QWidget#artTopClear {{ background: transparent; border: none; }}
             QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
             QWidget#artFrame {{
                 background: transparent;
@@ -548,7 +559,7 @@ class MainWindow(QMainWindow):
                 border-radius: 0 0 {b(10)}px {b(10)}px;
             }}
             QPushButton#ArtTransportBtn {{
-                background: transparent;
+                background: rgba(255, 250, 240, 0.10);
                 color: #f5ecd8;
                 border: {b(2)}px solid rgba(220, 200, 170, 0.42);
                 border-radius: {b(10)}px;
@@ -557,7 +568,7 @@ class MainWindow(QMainWindow):
                 padding: {b(2)}px {b(4)}px;
             }}
             QPushButton#ArtTransportBtn:hover:enabled {{
-                background: rgba(255, 250, 240, 0.08);
+                background: rgba(255, 250, 240, 0.18);
                 border-color: rgba(230, 210, 180, 0.55);
                 color: #fffaf0;
             }}
@@ -566,7 +577,7 @@ class MainWindow(QMainWindow):
             }}
             QPushButton#ArtTransportBtn:disabled {{
                 color: #5a4a3a;
-                background: transparent;
+                background: rgba(255, 250, 240, 0.05);
                 border-color: #4a3a2a;
             }}
             QPushButton {{
@@ -637,11 +648,9 @@ class MainWindow(QMainWindow):
                 color: #d4c4a8;
                 border: {b(2)}px solid #6a5a40;
                 border-radius: {b(10)}px;
-                padding: {b(4)}px;
-                min-width: {b(96)}px;
-                min-height: {b(96)}px;
-                max-width: {b(104)}px;
-                max-height: {b(104)}px;
+                padding: {b(2)}px;
+                min-width: 0;
+                min-height: 0;
             }}
             QToolButton#PlaylistTile:hover:enabled {{
                 background-color: #3a3024;
@@ -725,6 +734,8 @@ class MainWindow(QMainWindow):
         tlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # Top area forwards clicks to the cover; bar sits on the bottom inside the W×W frame.
         self._art_top_clear = QWidget()
+        self._art_top_clear.setObjectName("artTopClear")
+        self._art_top_clear.setAutoFillBackground(False)
         self._art_top_clear.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
@@ -733,6 +744,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
         )
         self._art_over = QWidget()
+        self._art_over.setObjectName("artOver")
         ovl = QVBoxLayout(self._art_over)
         ovl.setContentsMargins(0, 0, 0, 0)
         ovl.setSpacing(0)
@@ -1099,6 +1111,29 @@ class MainWindow(QMainWindow):
         side = min(int(side), int(max_w), cap_h, cap_w2, int(ART_SIDE_MAX))
         return max(120, int(side))
 
+    def _reflow_playlist_tiles(self) -> None:
+        """Scale recent-tile height so four rows + gaps fit in the hero (no bottom clip)."""
+        if not self._history_tiles:
+            return
+        sh = getattr(self, "_section_hero", None)
+        if sh is None or sh.height() < 40:
+            return
+        hero_h = int(sh.height())
+        m_top = _s(2)
+        gap = _s(8)
+        n = _MAX_ENTRIES // 2
+        body = hero_h - m_top
+        avail = max(0, body - (n - 1) * gap)
+        per = (avail // n) if n else 0
+        per = max(_s(20), int(per))
+        if n * per + (n - 1) * gap + m_top > hero_h:
+            per = max(16, (body - (n - 1) * gap) // n) if n else 16
+        col_w = int(self._playlist_col_w)
+        per = min(int(per), col_w)
+        for t in self._history_tiles:
+            t.refit(col_w, per)
+        self._apply_history_tiles()
+
     def _reflow_album_size(self) -> None:
         w = int(self._compute_album_side())
         w = max(120, min(int(w), int(ART_SIDE_MAX)))
@@ -1112,6 +1147,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_art_row_wrap", None) is not None:
             self._art_row_wrap.setFixedHeight(w)
         self._art_frame.updateGeometry()
+        self._reflow_playlist_tiles()
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
