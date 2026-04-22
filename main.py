@@ -483,9 +483,19 @@ class MainWindow(QMainWindow):
             QPushButton:pressed {{ background-color: #241a10; border-color: #6a5a40; color: #e8dcc4; }}
             QPushButton:disabled {{ color: #6a5a50; background-color: #2a2018; border-color: #4a4034; }}
             QPushButton#VolumeStepBtn {{
-                font-size: {b(15)}px;
-                font-weight: 600;
-                padding: {b(6)}px {b(4)}px;
+                min-width: {b(72)}px;
+                min-height: {b(72)}px;
+                max-width: {b(80)}px;
+                max-height: {b(80)}px;
+                padding: {b(8)}px;
+                background-color: #1e1810;
+                color: #e8dcc4;
+                border: {b(3)}px solid #6a5a45;
+                border-radius: {b(10)}px;
+            }}
+            QPushButton#VolumeStepBtn:hover:enabled {{
+                background-color: #2a2218;
+                border-color: #b09050;
             }}
             QPushButton#IconTransport {{
                 min-width: {b(70)}px; min-height: {b(70)}px; max-height: {b(80)}px; padding: {b(8)}px;
@@ -581,19 +591,20 @@ class MainWindow(QMainWindow):
         right_nav.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        # Increase first, then decrease (was the reverse with +/− only).
-        self.volume_up = QPushButton("Volume\nup")
+        # Lucide volume-2 / volume-1 (see icons/ATTRIBUTION.txt) — up = louder, down = quieter.
+        self.volume_up = QPushButton()
         self.volume_up.setObjectName("VolumeStepBtn")
         self.volume_up.setToolTip("Increase volume")
-        self.volume_down = QPushButton("Volume\ndown")
+        self.volume_down = QPushButton()
         self.volume_down.setObjectName("VolumeStepBtn")
         self.volume_down.setToolTip("Decrease volume")
         for b in (self.volume_up, self.volume_down):
-            b.setFixedSize(_btn(78), _btn(90))
+            b.setFixedSize(_btn(78), _btn(78))
+        self._init_volume_icons()
         self.volume_up.clicked.connect(self._on_volume_up)
         self.volume_down.clicked.connect(self._on_volume_down)
         self.vol_rail = QWidget()
-        self.vol_rail.setFixedWidth(_btn(110))
+        self.vol_rail.setFixedWidth(_btn(100))
         vol_col = QVBoxLayout(self.vol_rail)
         vol_col.setContentsMargins(0, 0, 0, 0)
         vol_col.setSpacing(_btn(10))
@@ -1187,6 +1198,28 @@ class MainWindow(QMainWindow):
         nv = max(0, self._vol_value - step)
         self._post_bg("/player/volume", {"volume": nv})
         self._sync_volume_display(nv, self._vol_max, force_hud=True)
+
+    def _init_volume_icons(self) -> None:
+        """Lucide ``volume-2`` / ``volume-1`` SVGs (https://lucide.dev) — see icons/ATTRIBUTION.txt."""
+        px = _btn(40)
+        self._volume_icon_px = px
+        sz = QSize(px, px)
+        self.volume_up.setIconSize(sz)
+        self.volume_down.setIconSize(sz)
+        u = _ICONS_DIR / "volume-up.svg"
+        d = _ICONS_DIR / "volume-down.svg"
+        if u.is_file():
+            self.volume_up.setIcon(
+                svg_colored_icon(u, "#e8dcc4", px)
+            )
+        else:
+            _log.warning("Missing icon: %s", u)
+        if d.is_file():
+            self.volume_down.setIcon(
+                svg_colored_icon(d, "#e8dcc4", px)
+            )
+        else:
+            _log.warning("Missing icon: %s", d)
 
     def _init_mode_icons(self) -> None:
         """Lucide SVGs (see icons/ATTRIBUTION.txt); stroke colors match retro brass/cream."""
