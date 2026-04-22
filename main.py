@@ -70,6 +70,7 @@ class AlbumArtLabel(QLabel):
     def __init__(self, size: int = 280) -> None:
         super().__init__()
         self._art_size = size
+        self._raw_pix: Optional[QPixmap] = None
         self.setFixedSize(size, size)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(_STYLE_ALBUM_PLACEHOLDER)
@@ -91,6 +92,7 @@ class AlbumArtLabel(QLabel):
         if old is not None:
             old.abort()  # finished disposes the reply; do not deleteLater here
         if not url:
+            self._raw_pix = None
             self.clear()
             self.setText("—")
             return
@@ -111,6 +113,7 @@ class AlbumArtLabel(QLabel):
         if reply.error() != QNetworkReply.NetworkError.NoError:
             reply.deleteLater()
             self._active_reply = None
+            self._raw_pix = None
             self.clear()
             self.setText("—")
             return
@@ -119,16 +122,32 @@ class AlbumArtLabel(QLabel):
         self._active_reply = None
         pix = QPixmap()
         if not pix.loadFromData(bytes(data)):
+            self._raw_pix = None
             self.clear()
             self.setText("—")
             return
-        scaled = pix.scaled(
+        self._raw_pix = pix
+        self._redraw_from_raw()
+
+    def _redraw_from_raw(self) -> None:
+        if self._raw_pix is None or self._raw_pix.isNull():
+            return
+        scaled = self._raw_pix.scaled(
             self._art_size,
             self._art_size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         self.setPixmap(scaled)
+
+    def set_square_size(self, side: int) -> None:
+        side = max(160, min(900, int(side)))
+        if side == self._art_size:
+            return
+        self._art_size = side
+        self.setFixedSize(side, side)
+        if self._raw_pix is not None and not self._raw_pix.isNull():
+            self._redraw_from_raw()
 
 
 class VolumeOverlay(QFrame):
@@ -229,6 +248,8 @@ class MainWindow(QMainWindow):
         self._hud_hide_timer.setInterval(1800)
         self._hud_hide_timer.timeout.connect(self._begin_hud_fade)
         self._hud_fade: Optional[QPropertyAnimation] = None
+        # repeat: 0=off, 1=one track, 2=whole context
+        self._repeat_mode: int = 0
         self._is_playing = False
         self._duration_ms = 0
         self._position_ms = 0
@@ -241,6 +262,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._wire_shortcuts()
+        QTimer.singleShot(0, self._reflow_album_size)
 
         self._ws = QWebSocket()
         self._ws.connected.connect(self._on_ws_connected)
@@ -285,28 +307,17 @@ class MainWindow(QMainWindow):
             QPushButton:hover { background-color: #5c4d40; border-color: #9a7b4a; }
             QPushButton:pressed { background-color: #3d3228; }
             QPushButton:disabled { color: #5a5048; background-color: #2e2620; border-color: #4a4036; }
-            QPushButton#ModeToggle {
-                min-height: 52px;
-                min-width: 152px;
-                font-size: 17px;
-                font-weight: bold;
-                border-radius: 12px;
-                padding: 12px 16px;
-                color: #a89880;
-                background-color: #3d3228;
-                border: 2px solid #5a4a38;
+            QPushButton#IconTransport {
+                min-width: 70px; min-height: 70px; max-height: 80px; font-size: 30px; padding: 8px;
+                background-color: #3d3228; border: 2px solid #5a4a38; border-radius: 12px; color: #9a8a70;
             }
-            QPushButton#ModeToggle:checked {
-                color: #f0e6d4;
-                background-color: #5a4820;
-                border: 3px solid #c9a43a;
-            }
-            QPushButton#ModeToggle:hover { border-color: #9a7b4a; }
-            QPushButton#ModeToggle:checked:hover {
-                background-color: #6a5628;
-                border-color: #dcc060;
-            }
-            QPushButton#ModeToggle:pressed { background-color: #332a20; }
+            QPushButton#IconTransport:hover { border-color: #9a7b4a; }
+            QPushButton#IconTransport:checked { color: #c9a43a; border: 3px solid #c9a43a; background-color: #4a3a20; }
+            QPushButton#RepeatCycle { min-width: 70px; min-height: 70px; font-size: 30px; padding: 8px; border-radius: 12px; background-color: #3d3228; border: 2px solid #5a4a38; }
+            QPushButton#RepeatCycle:hover { border-color: #9a7b4a; }
+            QPushButton#RepeatCycle[repeatState="off"] { color: #4a3a2a; }
+            QPushButton#RepeatCycle[repeatState="one"] { color: #c9a43a; border-color: #9a7b4a; }
+            QPushButton#RepeatCycle[repeatState="all"] { color: #c9a43a; border-color: #c9a43a; }
             """
         )
         self.setWindowFlags(
@@ -343,15 +354,35 @@ class MainWindow(QMainWindow):
         right_nav.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignHCenter)
 
+        self.volume_down = QPushButton("−")
+        self.volume_up = QPushButton("+")
+        for b in (self.volume_down, self.volume_up):
+            b.setFixedSize(72, 72)
+        self.volume_down.clicked.connect(self._on_volume_down)
+        self.volume_up.clicked.connect(self._on_volume_up)
+        self.vol_meta = QLabel("")
+        self.vol_meta.setStyleSheet("color: #7a6a58;")
+        self.vol_rail = QWidget()
+        self.vol_rail.setFixedWidth(100)
+        vol_col = QVBoxLayout(self.vol_rail)
+        vol_col.setContentsMargins(0, 0, 0, 0)
+        vol_col.setSpacing(10)
+        vol_lbl = QLabel("Volume")
+        vol_lbl.setStyleSheet("color: #9a8a70;")
+        vol_col.addWidget(vol_lbl, 0, Qt.AlignmentFlag.AlignLeft)
+        vol_col.addWidget(self.vol_meta, 0, Qt.AlignmentFlag.AlignLeft)
+        vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
+        vol_col.addWidget(self.volume_up, 0, Qt.AlignmentFlag.AlignLeft)
+        vol_col.addStretch(1)
+
         art_row = QHBoxLayout()
-        art_row.setSpacing(16)
-        art_row.addLayout(left_nav)
-        self.album_art = AlbumArtLabel(300)
+        art_row.setSpacing(6)
+        art_row.setContentsMargins(0, 0, 0, 0)
+        art_row.addLayout(left_nav, 0)
+        self.album_art = AlbumArtLabel(480)
         self.album_art.clicked.connect(self._on_playpause)
-        art_row.addWidget(self.album_art, 0, Qt.AlignmentFlag.AlignTop)
-        art_row.addLayout(right_nav)
-        art_row.addStretch(1)
-        root.addLayout(art_row)
+        art_row.addWidget(self.album_art, 1, Qt.AlignmentFlag.AlignCenter)
+        art_row.addLayout(right_nav, 0)
 
         info = QVBoxLayout()
         self.title_label = QLabel("No track")
@@ -376,24 +407,37 @@ class MainWindow(QMainWindow):
         self.sub_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.sub_label)
         info.addStretch()
-        root.addLayout(info)
 
-        vol = QHBoxLayout()
-        vol.setSpacing(16)
-        vol.addWidget(QLabel("Volume"), 0, Qt.AlignmentFlag.AlignVCenter)
-        self.volume_down = QPushButton("−")
-        self.volume_up = QPushButton("+")
-        for b in (self.volume_down, self.volume_up):
-            b.setFixedSize(72, 72)
-        self.volume_down.clicked.connect(self._on_volume_down)
-        self.volume_up.clicked.connect(self._on_volume_up)
-        vol.addWidget(self.volume_down)
-        vol.addWidget(self.volume_up)
-        self.vol_meta = QLabel("")
-        self.vol_meta.setStyleSheet("color: #7a6a58;")
-        vol.addWidget(self.vol_meta, 0, Qt.AlignmentFlag.AlignVCenter)
-        vol.addStretch(1)
-        root.addLayout(vol)
+        center = QVBoxLayout()
+        center.setSpacing(14)
+        center.addLayout(art_row, 1)
+        center.addLayout(info)
+
+        self.shuffle_btn = QPushButton("\U0001f500")  # 🔀 shuffle
+        self.shuffle_btn.setObjectName("IconTransport")
+        self.shuffle_btn.setCheckable(True)
+        self.shuffle_btn.setToolTip("Shuffle")
+        self.shuffle_btn.toggled.connect(self._on_shuffle)
+        self.repeat_btn = QPushButton()
+        self.repeat_btn.setObjectName("RepeatCycle")
+        self.repeat_btn.setToolTip("Repeat: off — tap to cycle (one / all)")
+        self.repeat_btn.clicked.connect(self._on_repeat_cycle)
+        self._apply_repeat_ui()
+        self.mode_rail = QWidget()
+        self.mode_rail.setFixedWidth(88)
+        mode_col = QVBoxLayout(self.mode_rail)
+        mode_col.setContentsMargins(0, 0, 0, 0)
+        mode_col.setSpacing(12)
+        mode_col.addWidget(self.shuffle_btn, 0, Qt.AlignmentFlag.AlignRight)
+        mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignRight)
+        mode_col.addStretch(1)
+
+        main_hero = QHBoxLayout()
+        main_hero.setSpacing(20)
+        main_hero.addWidget(self.vol_rail, 0, Qt.AlignmentFlag.AlignTop)
+        main_hero.addLayout(center, 1)
+        main_hero.addWidget(self.mode_rail, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(main_hero, 1)
 
         self._volume_overlay = VolumeOverlay(self)
         self._volume_overlay.hide()
@@ -430,22 +474,6 @@ class MainWindow(QMainWindow):
         prog.addWidget(self.duration_label)
         root.addLayout(prog)
 
-        toggles = QHBoxLayout()
-        self.shuffle_toggle = QPushButton("Shuffle")
-        self.repeat_track_toggle = QPushButton("Repeat track")
-        self.repeat_context_toggle = QPushButton("Repeat context")
-        for b in (self.shuffle_toggle, self.repeat_track_toggle, self.repeat_context_toggle):
-            b.setObjectName("ModeToggle")
-            b.setCheckable(True)
-        self.shuffle_toggle.toggled.connect(self._on_shuffle)
-        self.repeat_track_toggle.toggled.connect(self._on_repeat_track)
-        self.repeat_context_toggle.toggled.connect(self._on_repeat_context)
-        toggles.addWidget(self.shuffle_toggle)
-        toggles.addWidget(self.repeat_track_toggle)
-        toggles.addWidget(self.repeat_context_toggle)
-        toggles.addStretch()
-        root.addLayout(toggles)
-
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.NoFrame)
         sep.setFixedHeight(1)
@@ -473,6 +501,21 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._volume_overlay is not None:
             self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
+        self._reflow_album_size()
+
+    def _reflow_album_size(self) -> None:
+        w = max(400, self.width())
+        h = max(400, self.height())
+        # root margins + left/right side rails (volume, shuffle/repeat) + main_hero column gaps
+        root_m = 24 * 2
+        hero_gaps = 20 * 2
+        side_rails = self.vol_rail.width() + self.mode_rail.width()
+        navcol = 96
+        max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
+        max_h = h - 260
+        side = int(min(max_w, max_h, 0.52 * h))
+        side = max(200, min(side, 920))
+        self.album_art.set_square_size(side)
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
@@ -522,18 +565,16 @@ class MainWindow(QMainWindow):
         elif et in ("shuffle_context", "repeat_context", "repeat_track") and isinstance(data, dict):
             v = data.get("value")
             if et == "shuffle_context" and isinstance(v, bool):
-                self._block_toggle(self.shuffle_toggle, v)
-            elif et == "repeat_context" and isinstance(v, bool):
-                self._block_toggle(self.repeat_context_toggle, v)
-            elif et == "repeat_track" and isinstance(v, bool):
-                self._block_toggle(self.repeat_track_toggle, v)
+                self._set_shuffle_checked(v)
+            else:
+                self._request_status_bg()
         if et in ("metadata", "seek", "playing", "paused", "not_playing", "will_play", "volume", "active", "inactive"):
             self._request_status_bg()
 
-    def _block_toggle(self, btn: QPushButton, on: bool) -> None:
-        btn.blockSignals(True)
-        btn.setChecked(on)
-        btn.blockSignals(False)
+    def _set_shuffle_checked(self, on: bool) -> None:
+        self.shuffle_btn.blockSignals(True)
+        self.shuffle_btn.setChecked(on)
+        self.shuffle_btn.blockSignals(False)
 
     def _on_tick(self) -> None:
         if not self._is_playing or self._duration_ms <= 0:
@@ -570,17 +611,10 @@ class MainWindow(QMainWindow):
         if not isinstance(st, dict):
             return
 
-        self._block_toggle(
-            self.shuffle_toggle,
-            bool(st.get("shuffle_context")),
-        )
-        self._block_toggle(
-            self.repeat_context_toggle,
-            bool(st.get("repeat_context")),
-        )
-        self._block_toggle(
-            self.repeat_track_toggle,
+        self._set_shuffle_checked(bool(st.get("shuffle_context")))
+        self._sync_repeat_mode(
             bool(st.get("repeat_track")),
+            bool(st.get("repeat_context")),
         )
 
         vol = st.get("volume")
@@ -755,11 +789,83 @@ class MainWindow(QMainWindow):
     def _on_shuffle(self, on: bool) -> None:
         self._post_bg("/player/shuffle_context", {"shuffle_context": on})
 
-    def _on_repeat_track(self, on: bool) -> None:
-        self._post_bg("/player/repeat_track", {"repeat_track": on})
+    def _apply_repeat_ui(self) -> None:
+        m = self._repeat_mode
+        if m == 0:
+            self.repeat_btn.setText("\U0001f501")  # 🔁 (off: dim via style)
+            self.repeat_btn.setProperty("repeatState", "off")
+        elif m == 1:
+            self.repeat_btn.setText("\U0001f502")  # 🔂 repeat one
+            self.repeat_btn.setProperty("repeatState", "one")
+        else:
+            self.repeat_btn.setText("\U0001f501")  # 🔁 repeat all
+            self.repeat_btn.setProperty("repeatState", "all")
+        tips = ("Repeat: off", "Repeat one", "Repeat all")
+        self.repeat_btn.setToolTip(tips[m])
+        self._polish_repeat_btn()
 
-    def _on_repeat_context(self, on: bool) -> None:
-        self._post_bg("/player/repeat_context", {"repeat_context": on})
+    def _polish_repeat_btn(self) -> None:
+        st = self.repeat_btn.style()
+        st.unpolish(self.repeat_btn)
+        st.polish(self.repeat_btn)
+
+    def _sync_repeat_mode(self, repeat_track: bool, repeat_context: bool) -> None:
+        if repeat_track:
+            m = 1
+        elif repeat_context:
+            m = 2
+        else:
+            m = 0
+        if m == self._repeat_mode:
+            return
+        self._repeat_mode = m
+        self._apply_repeat_ui()
+
+    def _on_repeat_cycle(self) -> None:
+        self._repeat_mode = (self._repeat_mode + 1) % 3
+        self._post_repeat_state(self._repeat_mode)
+        self._apply_repeat_ui()
+
+    def _post_repeat_state(self, mode: int) -> None:
+        def run() -> None:
+            try:
+                if mode == 0:
+                    post_json(
+                        "/player/repeat_track",
+                        {"repeat_track": False},
+                        cfg=self._cfg,
+                    )
+                    post_json(
+                        "/player/repeat_context",
+                        {"repeat_context": False},
+                        cfg=self._cfg,
+                    )
+                elif mode == 1:
+                    post_json(
+                        "/player/repeat_context",
+                        {"repeat_context": False},
+                        cfg=self._cfg,
+                    )
+                    post_json(
+                        "/player/repeat_track",
+                        {"repeat_track": True},
+                        cfg=self._cfg,
+                    )
+                else:
+                    post_json(
+                        "/player/repeat_track",
+                        {"repeat_track": False},
+                        cfg=self._cfg,
+                    )
+                    post_json(
+                        "/player/repeat_context",
+                        {"repeat_context": True},
+                        cfg=self._cfg,
+                    )
+            except GlsApiError as e:
+                _log.warning("%s", e)
+
+        threading.Thread(target=run, daemon=True, name="gls-repeat").start()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._status_timer.stop()
