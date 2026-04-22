@@ -547,12 +547,14 @@ class MainWindow(QMainWindow):
         self._apply_repeat_ui()
         self._refresh_shuffle_icon()
         self.mode_rail = QWidget()
-        self.mode_rail.setFixedWidth(_btn(88))
+        # b(70) + horizontal padding b(8)*2 is wider than b(88); fixed b(88) rail clipped the buttons.
+        _mode_w = max(_btn(100), _btn(70) + 2 * _btn(8) + 2 * _btn(3) + _s(12))
+        self.mode_rail.setFixedWidth(_mode_w)
         mode_col = QVBoxLayout(self.mode_rail)
-        mode_col.setContentsMargins(0, 0, 0, 0)
+        mode_col.setContentsMargins(0, 0, _s(4), 0)
         mode_col.setSpacing(_btn(12))
-        mode_col.addWidget(self.shuffle_btn, 0, Qt.AlignmentFlag.AlignRight)
-        mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignRight)
+        mode_col.addWidget(self.shuffle_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
         main_hero = QHBoxLayout()
