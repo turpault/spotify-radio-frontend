@@ -15,20 +15,27 @@ import threading
 from functools import partial
 from typing import Any, Optional
 
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSlot
-from PyQt6.QtGui import QCloseEvent, QFont, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtCore import (
+    QAbstractAnimation,
+    Qt,
+    QPropertyAnimation,
+    QTimer,
+    QUrl,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QCloseEvent, QFont, QKeySequence, QPixmap, QResizeEvent, QShortcut
 from PyQt6.QtNetwork import QAbstractSocket, QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QProgressBar,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -99,6 +106,87 @@ class AlbumArtLabel(QLabel):
         self.setPixmap(scaled)
 
 
+class VolumeOverlay(QFrame):
+    """Fullscreen dim + centered macOS-style volume HUD (large level + bar)."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setObjectName("volumeOverlay")
+        self.setStyleSheet(
+            """
+            #volumeOverlay { background-color: rgba(0, 0, 0, 0.55); }
+            QFrame#volumeHudCard {
+                background-color: rgba(40, 40, 40, 245);
+                border-radius: 28px;
+                border: none;
+            }
+            QLabel#hudPercent { color: #FFFFFF; font-weight: 600; }
+            QProgressBar {
+                border: none; border-radius: 4px; background: rgba(255,255,255,0.15);
+                height: 14px; text-align: center;
+            }
+            QProgressBar::chunk { background-color: #FFFFFF; border-radius: 3px; }
+            """
+        )
+        self._icon = QLabel("🔊")
+        ic = QFont()
+        ic.setPointSize(56)
+        self._icon.setFont(ic)
+        self._icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._bar = QProgressBar()
+        self._bar.setTextVisible(False)
+        self._bar.setFixedHeight(14)
+        self._bar.setMinimumWidth(420)
+        self._bar.setMaximumWidth(520)
+        self._pct = QLabel("0")
+        self._pct.setObjectName("hudPercent")
+        pf = QFont()
+        pf.setPointSize(44)
+        pf.setBold(True)
+        self._pct.setFont(pf)
+        self._pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._sub = QLabel("")
+        self._sub.setStyleSheet("color: rgba(255,255,255,0.55); font-size: 14px;")
+        self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card = QFrame()
+        card.setObjectName("volumeHudCard")
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(40, 36, 40, 36)
+        inner.setSpacing(20)
+        inner.addWidget(self._icon, alignment=Qt.AlignmentFlag.AlignCenter)
+        inner.addWidget(self._pct, alignment=Qt.AlignmentFlag.AlignCenter)
+        inner.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignCenter)
+        inner.addWidget(self._sub, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addStretch(1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(1)
+
+        self._fx = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._fx)
+        self._fx.setOpacity(1.0)
+        self.hide()
+        for w in (self, *self.findChildren(QWidget)):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_level(self, value: int, max_v: int) -> None:
+        max_v = max(1, int(max_v))
+        value = int(max(0, min(max_v, value)))
+        pct = int(round(100.0 * value / max_v)) if max_v else 0
+        self._bar.setRange(0, max_v)
+        self._bar.setValue(value)
+        self._pct.setText(f"{pct}%")
+        self._sub.setText(f"{value} / {max_v}")
+
+
 def _fg_post(path: str, body: Optional[dict[str, Any]], cfg: GlsConfig) -> None:
     post_json(path, body, cfg=cfg)
 
@@ -107,7 +195,15 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._cfg = GlsConfig.from_env()
-        self._suppress_volume = False
+        self._vol_max: int = 100
+        self._vol_value: int = 0
+        self._last_hud_val: Optional[int] = None
+        self._volume_overlay: Optional[VolumeOverlay] = None
+        self._hud_hide_timer = QTimer(self)
+        self._hud_hide_timer.setSingleShot(True)
+        self._hud_hide_timer.setInterval(1800)
+        self._hud_hide_timer.timeout.connect(self._begin_hud_fade)
+        self._hud_fade: Optional[QPropertyAnimation] = None
         self._is_playing = False
         self._duration_ms = 0
         self._position_ms = 0
@@ -159,13 +255,6 @@ class MainWindow(QMainWindow):
             QPushButton:disabled { color: #666666; background-color: #111111; }
             QCheckBox { font-size: 16px; spacing: 10px; }
             QCheckBox::indicator { width: 28px; height: 28px; }
-            QSlider::groove:horizontal {
-                border: none; height: 10px; background: #1a1a1a; border-radius: 5px;
-            }
-            QSlider::handle:horizontal {
-                background: #1db954; width: 22px; margin: -8px 0; border-radius: 11px;
-                border: none;
-            }
             """
         )
         self.setWindowFlags(
@@ -223,15 +312,24 @@ class MainWindow(QMainWindow):
         root.addLayout(track_row)
 
         vol = QHBoxLayout()
+        vol.setSpacing(16)
         vol.addWidget(QLabel("Volume"), 0, Qt.AlignmentFlag.AlignVCenter)
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setRange(0, 100)
-        self.volume_slider.valueChanged.connect(self._on_volume)
-        vol.addWidget(self.volume_slider, 1)
+        self.volume_down = QPushButton("−")
+        self.volume_up = QPushButton("+")
+        for b in (self.volume_down, self.volume_up):
+            b.setFixedSize(72, 72)
+        self.volume_down.clicked.connect(self._on_volume_down)
+        self.volume_up.clicked.connect(self._on_volume_up)
+        vol.addWidget(self.volume_down)
+        vol.addWidget(self.volume_up)
         self.vol_meta = QLabel("")
         self.vol_meta.setStyleSheet("color: #666666;")
-        vol.addWidget(self.vol_meta)
+        vol.addWidget(self.vol_meta, 0, Qt.AlignmentFlag.AlignVCenter)
+        vol.addStretch(1)
         root.addLayout(vol)
+
+        self._volume_overlay = VolumeOverlay(self)
+        self._volume_overlay.hide()
 
         prog = QHBoxLayout()
         self.elapsed_label = QLabel("0:00")
@@ -291,6 +389,19 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
         QShortcut(QKeySequence(Qt.Key.Key_Left), self, activated=self._on_prev)
         QShortcut(QKeySequence(Qt.Key.Key_Right), self, activated=self._on_next)
+        QShortcut(QKeySequence(Qt.Key.Key_Up), self, activated=self._on_volume_up)
+        QShortcut(QKeySequence(Qt.Key.Key_Down), self, activated=self._on_volume_down)
+        for qk, fn in (
+            (getattr(Qt.Key, "Key_VolumeUp", None), self._on_volume_up),
+            (getattr(Qt.Key, "Key_VolumeDown", None), self._on_volume_down),
+        ):
+            if qk is not None:
+                QShortcut(QKeySequence(qk), self, activated=fn)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if self._volume_overlay is not None:
+            self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
@@ -338,11 +449,7 @@ class MainWindow(QMainWindow):
             val = int(data.get("value", 0))
             mx = int(data.get("max", 0) or 0)
             if mx > 0:
-                self._suppress_volume = True
-                self.volume_slider.setRange(0, mx)
-                self.volume_slider.setValue(min(mx, val))
-                self._suppress_volume = False
-                self.vol_meta.setText(f"0–{mx}")
+                self._sync_volume_display(val, mx, force_hud=False)
         elif et == "stopped":
             self._clear_track()
         elif et in ("shuffle_context", "repeat_context", "repeat_track") and isinstance(data, dict):
@@ -421,12 +528,7 @@ class MainWindow(QMainWindow):
         vol = st.get("volume")
         steps = st.get("volume_steps")
         if isinstance(vol, (int, float)) and isinstance(steps, (int, float)) and int(steps) > 0:
-            mx = int(steps)
-            self._suppress_volume = True
-            self.volume_slider.setRange(0, mx)
-            self.volume_slider.setValue(int(min(mx, int(vol))))
-            self._suppress_volume = False
-            self.vol_meta.setText(f"0–{mx}")
+            self._sync_volume_display(int(vol), int(steps), force_hud=False)
 
         paused = bool(st.get("paused"))
         stop = bool(st.get("stopped"))
@@ -518,10 +620,78 @@ class MainWindow(QMainWindow):
     def _on_prev(self) -> None:
         self._post_bg("/player/prev", {})
 
-    def _on_volume(self, value: int) -> None:
-        if self._suppress_volume:
+    def _vol_step(self) -> int:
+        return max(1, self._vol_max // 16)
+
+    def _sync_volume_display(self, val: int, max_v: int, *, force_hud: bool) -> None:
+        self._vol_max = max(1, int(max_v))
+        val = int(max(0, min(self._vol_max, int(val))))
+        self._vol_value = val
+        self.volume_down.setEnabled(val > 0)
+        self.volume_up.setEnabled(val < self._vol_max)
+        self.vol_meta.setText(f"{val} / {self._vol_max}")
+        should_flash = force_hud or (
+            self._last_hud_val is not None and val != self._last_hud_val
+        )
+        self._last_hud_val = val
+        if should_flash:
+            self._flash_volume_hud(val, self._vol_max)
+
+    def _flash_volume_hud(self, val: int, max_v: int) -> None:
+        if self._volume_overlay is None:
             return
-        self._post_bg("/player/volume", {"volume": int(value)})
+        self._hud_hide_timer.stop()
+        if self._hud_fade is not None and self._hud_fade.state() == QAbstractAnimation.State.Running:
+            self._hud_fade.stop()
+        eff = self._volume_overlay.graphicsEffect()
+        if isinstance(eff, QGraphicsOpacityEffect):
+            eff.setOpacity(1.0)
+        self._volume_overlay.set_level(val, max_v)
+        self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
+        self._volume_overlay.show()
+        self._volume_overlay.raise_()
+        self._hud_hide_timer.start()
+
+    def _begin_hud_fade(self) -> None:
+        if self._volume_overlay is None or not self._volume_overlay.isVisible():
+            return
+        eff = self._volume_overlay.graphicsEffect()
+        if not isinstance(eff, QGraphicsOpacityEffect):
+            self._volume_overlay.hide()
+            return
+        if self._hud_fade is not None and self._hud_fade.state() == QAbstractAnimation.State.Running:
+            return
+        self._hud_fade = QPropertyAnimation(eff, b"opacity", self)
+        self._hud_fade.setDuration(300)
+        self._hud_fade.setStartValue(1.0)
+        self._hud_fade.setEndValue(0.0)
+        self._hud_fade.finished.connect(self._hud_fade_finished)
+        self._hud_fade.start()
+
+    def _hud_fade_finished(self) -> None:
+        if self._hud_fade is not None:
+            try:
+                self._hud_fade.finished.disconnect(self._hud_fade_finished)
+            except (TypeError, RuntimeError):
+                pass
+        self._hud_fade = None
+        if self._volume_overlay is not None:
+            self._volume_overlay.hide()
+            e = self._volume_overlay.graphicsEffect()
+            if isinstance(e, QGraphicsOpacityEffect):
+                e.setOpacity(1.0)
+
+    def _on_volume_up(self) -> None:
+        step = self._vol_step()
+        nv = min(self._vol_max, self._vol_value + step)
+        self._post_bg("/player/volume", {"volume": nv})
+        self._sync_volume_display(nv, self._vol_max, force_hud=True)
+
+    def _on_volume_down(self) -> None:
+        step = self._vol_step()
+        nv = max(0, self._vol_value - step)
+        self._post_bg("/player/volume", {"volume": nv})
+        self._sync_volume_display(nv, self._vol_max, force_hud=True)
 
     def _on_shuffle(self, on: bool) -> None:
         self._post_bg("/player/shuffle_context", {"shuffle_context": on})
@@ -535,6 +705,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._status_timer.stop()
         self._tick.stop()
+        self._hud_hide_timer.stop()
+        if self._hud_fade is not None and self._hud_fade.state() == QAbstractAnimation.State.Running:
+            self._hud_fade.stop()
         self._ws.close()
         super().closeEvent(event)
 
