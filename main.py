@@ -8,6 +8,13 @@ Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_B
 Playlists (not every status poll): GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS (default 5000),
 GOLIBRESPOT_PLAYLIST_INTERVAL_MS (default 300000 = 5 min), GOLIBRESPOT_STATE_PATH
 for go-librespot state.json — refetch when that file's mtime/size changes.
+
+Spotify Web API (https://developer.spotify.com/documentation/web-api): when
+``SPOTIFY_ACCESS_TOKEN`` or a token file exists (``SPOTIFY_TOKEN_PATH`` or
+``~/.config/jukebox-frontend-python/spotify_tokens.json``), playlists are read
+from ``GET https://api.spotify.com/v1/me/playlists`` (needs ``playlist-read-private``).
+Otherwise go-librespot's ``/web-api/`` proxy is used. ``GOLIBRESPOT_FORCE_LIBRESPOT_PLAYLISTS=1``
+skips the Web API. ``SPOTIFY_CLIENT_ID`` enables refresh of expired tokens.
 """
 
 from __future__ import annotations
