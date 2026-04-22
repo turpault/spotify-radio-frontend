@@ -46,6 +46,12 @@ _log = logging.getLogger("gls-frontend")
 
 # go-librespot uses {"type": "...", "data": ...} (cmd/daemon/api_server.go ApiEvent).
 
+# Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
+_STYLE_ALBUM_PLACEHOLDER = (
+    "background-color: #1a1510; color: #5a5048; border: 3px solid #8b7355; "
+    "border-radius: 8px; font-family: Palatino, 'Times New Roman', serif;"
+)
+
 
 class AlbumArtLabel(QLabel):
     def __init__(self, size: int = 280) -> None:
@@ -53,7 +59,7 @@ class AlbumArtLabel(QLabel):
         self._art_size = size
         self.setFixedSize(size, size)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("background-color: #111111; border: none; border-radius: 12px; color: #666666;")
+        self.setStyleSheet(_STYLE_ALBUM_PLACEHOLDER)
         self.setText("—")
         self._nam = QNetworkAccessManager(self)
         self._active_reply: Optional[QNetworkReply] = None
@@ -115,18 +121,18 @@ class VolumeOverlay(QFrame):
         self.setObjectName("volumeOverlay")
         self.setStyleSheet(
             """
-            #volumeOverlay { background-color: rgba(0, 0, 0, 0.55); }
+            #volumeOverlay { background-color: rgba(20, 14, 10, 0.72); }
             QFrame#volumeHudCard {
-                background-color: rgba(40, 40, 40, 245);
-                border-radius: 28px;
-                border: none;
+                background-color: rgba(52, 42, 34, 248);
+                border-radius: 20px;
+                border: 3px solid #9a7b4a;
             }
-            QLabel#hudPercent { color: #FFFFFF; font-weight: 600; }
+            QLabel#hudPercent { color: #f0e6d4; font-weight: 600; }
             QProgressBar {
-                border: none; border-radius: 4px; background: rgba(255,255,255,0.15);
-                height: 14px; text-align: center;
+                border: 1px solid #5a4a38; border-radius: 5px; background: #1a1410; height: 14px;
             }
-            QProgressBar::chunk { background-color: #FFFFFF; border-radius: 3px; }
+            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                stop:0 #a68428, stop:0.5 #d4a83c, stop:1 #8a6a20); border-radius: 3px; }
             """
         )
         self._icon = QLabel("🔊")
@@ -147,7 +153,7 @@ class VolumeOverlay(QFrame):
         self._pct.setFont(pf)
         self._pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub = QLabel("")
-        self._sub.setStyleSheet("color: rgba(255,255,255,0.55); font-size: 14px;")
+        self._sub.setStyleSheet("color: rgba(200, 185, 160, 0.75); font-size: 14px;")
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         card = QFrame()
@@ -244,17 +250,52 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("go-librespot")
         self.setStyleSheet(
             """
-            QMainWindow, QWidget { background-color: #000000; color: #FFFFFF; border: none; }
-            QLabel { background-color: #000000; color: #FFFFFF; border: none; }
+            QMainWindow, QWidget { background-color: #241a14; color: #e8dcc4; border: none; }
+            QLabel { background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }
             QPushButton {
-                background-color: #1a1a1a; color: #FFFFFF;
-                border: none; border-radius: 14px;
-                font-size: 22px; font-weight: bold; padding: 12px 20px; min-height: 44px; min-width: 44px;
+                background-color: #4a3d32;
+                color: #1a120c;
+                border: 2px solid #7a623e;
+                border-radius: 14px;
+                font-size: 22px;
+                font-weight: bold;
+                padding: 12px 20px;
+                min-height: 44px;
+                min-width: 44px;
+                font-family: Palatino, Georgia, serif;
             }
-            QPushButton:hover { background-color: #2a2a2a; }
-            QPushButton:disabled { color: #666666; background-color: #111111; }
-            QCheckBox { font-size: 16px; spacing: 10px; }
-            QCheckBox::indicator { width: 28px; height: 28px; }
+            QPushButton:hover { background-color: #5c4d40; border-color: #9a7b4a; }
+            QPushButton:pressed { background-color: #3d3228; }
+            QPushButton:disabled { color: #5a5048; background-color: #2e2620; border-color: #4a4036; }
+            QPushButton#PlayDial {
+                background-color: #4a3d32;
+                color: #f0e6d4;
+                border: 4px solid #c9a43a;
+                border-radius: 48px;
+                min-width: 96px;
+                min-height: 96px;
+                font-size: 28px;
+            }
+            QPushButton#PlayDial:hover { background-color: #5c4d40; border-color: #dcc060; }
+            QPushButton#PlayDial:pressed { background-color: #3d3228; }
+            QCheckBox {
+                font-size: 16px;
+                spacing: 10px;
+                color: #d4c4a8;
+                font-family: Palatino, Georgia, serif;
+            }
+            QCheckBox::indicator {
+                width: 28px;
+                height: 28px;
+                border-radius: 5px;
+                border: 2px solid #6b5344;
+                background: #2a2218;
+            }
+            QCheckBox::indicator:checked {
+                background: #8a6a28;
+                border: 2px solid #c9a43a;
+            }
+            QCheckBox::indicator:hover { border-color: #9a7b4a; }
             """
         )
         self.setWindowFlags(
@@ -270,7 +311,7 @@ class MainWindow(QMainWindow):
         root.setSpacing(18)
 
         self.conn_label = QLabel("")
-        self.conn_label.setStyleSheet("color: #888888;")
+        self.conn_label.setStyleSheet("color: #a89880; font-size: 13px;")
         root.addWidget(self.conn_label)
 
         track_row = QHBoxLayout()
@@ -291,14 +332,14 @@ class MainWindow(QMainWindow):
         af = QFont()
         af.setPointSize(15)
         self.artist_label.setFont(af)
-        self.artist_label.setStyleSheet("color: #cccccc;")
+        self.artist_label.setStyleSheet("color: #c4b59a;")
         info.addWidget(self.artist_label)
         self.album_label = QLabel("")
         self.album_label.setWordWrap(True)
-        self.album_label.setStyleSheet("color: #888888;")
+        self.album_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.album_label)
         self.sub_label = QLabel("")
-        self.sub_label.setStyleSheet("color: #888888;")
+        self.sub_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.sub_label)
         info.addStretch()
         track_row.addLayout(info, 1)
@@ -316,7 +357,7 @@ class MainWindow(QMainWindow):
         vol.addWidget(self.volume_down)
         vol.addWidget(self.volume_up)
         self.vol_meta = QLabel("")
-        self.vol_meta.setStyleSheet("color: #666666;")
+        self.vol_meta.setStyleSheet("color: #7a6a58;")
         vol.addWidget(self.vol_meta, 0, Qt.AlignmentFlag.AlignVCenter)
         vol.addStretch(1)
         root.addLayout(vol)
@@ -326,16 +367,31 @@ class MainWindow(QMainWindow):
 
         prog = QHBoxLayout()
         self.elapsed_label = QLabel("0:00")
+        _time_style = (
+            "color: #d4c4a8; font-family: 'Courier New', Courier, monospace; "
+            "font-size: 15px; font-weight: bold;"
+        )
+        self.elapsed_label.setStyleSheet(_time_style)
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setStyleSheet(
             """
-            QProgressBar { border: none; border-radius: 4px; background: #1a1a1a; height: 12px; }
-            QProgressBar::chunk { background-color: #1db954; border-radius: 2px; }
+            QProgressBar {
+                border: 1px solid #5a4a38;
+                border-radius: 5px;
+                background: #14100c;
+                height: 12px;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #8a6a24, stop:0.5 #c9a43a, stop:1 #6a5220);
+                border-radius: 3px;
+            }
             """
         )
         self.duration_label = QLabel("0:00")
+        self.duration_label.setStyleSheet(_time_style)
         prog.addWidget(self.elapsed_label)
         prog.addWidget(self.progress_bar, 1)
         prog.addWidget(self.duration_label)
@@ -372,6 +428,7 @@ class MainWindow(QMainWindow):
         self.prev_btn.setFixedSize(88, 88)
         self.prev_btn.clicked.connect(self._on_prev)
         self.play_btn = QPushButton("▶")
+        self.play_btn.setObjectName("PlayDial")
         self.play_btn.setFixedSize(96, 96)
         self.play_btn.clicked.connect(self._on_playpause)
         self.next_btn = QPushButton("⏭")
@@ -384,11 +441,11 @@ class MainWindow(QMainWindow):
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.NoFrame)
         sep.setFixedHeight(1)
-        sep.setStyleSheet("background-color: #333333;")
+        sep.setStyleSheet("background-color: #5c4a38;")
         root.addWidget(sep)
 
         hint = QLabel("API: " + self._cfg.base)
-        hint.setStyleSheet("color: #555555;")
+        hint.setStyleSheet("color: #5a5048; font-size: 12px;")
         root.addWidget(hint)
 
     def _wire_shortcuts(self) -> None:
@@ -730,6 +787,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     w = MainWindow()
     w.showFullScreen()
     sys.exit(app.exec())
