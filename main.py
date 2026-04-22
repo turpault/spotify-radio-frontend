@@ -2,19 +2,12 @@
 """
 PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events).
 
-Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE, e.g.:
-  GOLIBRESPOT_BASE=http://127.0.0.1:3678
+Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
-Playlists (not every status poll): GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS (default 5000),
-GOLIBRESPOT_PLAYLIST_INTERVAL_MS (default 300000 = 5 min), GOLIBRESPOT_STATE_PATH
-for go-librespot state.json — refetch when that file's mtime/size changes.
-
-Spotify Web API (https://developer.spotify.com/documentation/web-api): when
-``SPOTIFY_ACCESS_TOKEN`` or a token file exists (``SPOTIFY_TOKEN_PATH`` or
-``~/.config/jukebox-frontend-python/spotify_tokens.json``), playlists are read
-from ``GET https://api.spotify.com/v1/me/playlists`` (needs ``playlist-read-private``).
-Otherwise go-librespot's ``/web-api/`` proxy is used. ``GOLIBRESPOT_FORCE_LIBRESPOT_PLAYLISTS=1``
-skips the Web API. ``SPOTIFY_CLIENT_ID`` enables refresh of expired tokens.
+Recent tracks: as playback changes, the UI records track metadata + context URI (from
+WebSocket events) and stores album art under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
+``~/.config/jukebox-frontend-go-librespot/``). The six side tiles show the last six tracks; tap
+to start that context/URI via the local player API (no Spotify Web / Connect REST client).
 """
 
 from __future__ import annotations
@@ -30,7 +23,6 @@ from typing import Any, Optional
 
 from PyQt6.QtCore import (
     QAbstractAnimation,
-    QFileSystemWatcher,
     QPropertyAnimation,
     QSize,
     Qt,
@@ -67,8 +59,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from gls_client import GlsApiError, GlsConfig, MePlaylist, get_json, get_me_playlists, post_json
+from gls_client import GlsApiError, GlsConfig, get_json, post_json
 from icon_utils import svg_colored_icon
+from playback_history import HistoryItem, PlaybackHistory
 
 _log = logging.getLogger("gls-frontend")
 
@@ -94,30 +87,6 @@ def _btn(n: float) -> int:
 
 
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
-
-
-def _default_go_librespot_state_path() -> Path:
-    """Path to go-librespot `state.json` (credentials / session on disk)."""
-    override = (os.environ.get("GOLIBRESPOT_STATE_PATH") or "").strip()
-    if override:
-        return Path(override).expanduser()
-    if sys.platform == "darwin":
-        return (
-            Path.home()
-            / "Library"
-            / "Application Support"
-            / "go-librespot"
-            / "state.json"
-        )
-    return Path.home() / ".config" / "go-librespot" / "state.json"
-
-
-def _state_file_fingerprint(path: Path) -> Optional[str]:
-    try:
-        st = path.stat()
-        return f"{st.st_mtime_ns}:{st.st_size}"
-    except OSError:
-        return None
 
 
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
@@ -343,8 +312,8 @@ def _fg_post(path: str, body: Optional[dict[str, Any]], cfg: GlsConfig) -> None:
     post_json(path, body, cfg=cfg)
 
 
-class PlaylistTile(QWidget):
-    """List-music icon (tap) + separate caption; avoids QToolButton text-under-icon clipping on macOS."""
+class HistoryTile(QWidget):
+    """Recent track: local cover (or icon) + caption; tap to play that URI on the device."""
 
     play_requested = pyqtSignal(str)
 
@@ -358,7 +327,7 @@ class PlaylistTile(QWidget):
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(_s(4))
-        self._uri = ""
+        self._play_uri = ""
         self._btn = QToolButton()
         self._btn.setObjectName("PlaylistTile")
         self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
@@ -377,29 +346,62 @@ class PlaylistTile(QWidget):
         self._caption.setFixedWidth(max(40, int(col_w) - _s(8)))
         v.addWidget(self._btn, 0, Qt.AlignmentFlag.AlignHCenter)
         v.addWidget(self._caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._fallback_icon = tile_icon
         self._apply_empty()
 
     def _on_btn(self) -> None:
-        u = (self._uri or "").strip()
+        u = (self._play_uri or "").strip()
         if u.startswith("spotify:"):
             self.play_requested.emit(u)
 
     def _apply_empty(self) -> None:
-        self._uri = ""
+        self._play_uri = ""
         self._caption.setText("—")
         self._caption.setToolTip("")
+        self._btn.setIcon(self._fallback_icon)
         self._btn.setEnabled(False)
 
-    def set_playlist(self, pl: Optional[MePlaylist], tile_icon: QIcon) -> None:
-        if pl is not None and pl.uri:
-            self._uri = pl.uri
-            self._caption.setText((pl.name or "—").strip() or "—")
-            self._caption.setToolTip(pl.name)
-            self._btn.setIcon(tile_icon)
-            self._btn.setEnabled(True)
-        else:
+    def set_history_item(
+        self,
+        item: Optional[HistoryItem],
+        history: PlaybackHistory,
+        tile_icon: QIcon,
+    ) -> None:
+        self._fallback_icon = tile_icon
+        if item is None:
             self._apply_empty()
-            self._btn.setIcon(tile_icon)
+            return
+        u = item.play_uri()
+        if not u.startswith("spotify:"):
+            self._apply_empty()
+            return
+        self._play_uri = u
+        cap = (item.name or "—").strip() or "—"
+        if len(cap) > 48:
+            cap = cap[:45] + "…"
+        self._caption.setText(cap)
+        tip = f"{item.name}\n{(item.album_name or '').strip()}"
+        art = ", ".join(item.artist_names) if item.artist_names else ""
+        if art:
+            tip = f"{item.name}\n{art}\n{(item.album_name or '').strip()}"
+        self._caption.setToolTip(tip.strip())
+        cp = history.resolve_cover(item)
+        isz = self._btn.iconSize()
+        iw, ih = isz.width(), isz.height()
+        if cp is not None and cp.is_file():
+            pix = QPixmap(str(cp))
+            if not pix.isNull():
+                scaled = pix.scaled(
+                    iw,
+                    ih,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._btn.setIcon(QIcon(scaled))
+                self._btn.setEnabled(True)
+                return
+        self._btn.setIcon(tile_icon)
+        self._btn.setEnabled(True)
 
 
 class MainWindow(QMainWindow):
@@ -415,25 +417,8 @@ class MainWindow(QMainWindow):
         self._hud_hide_timer.setInterval(1800)
         self._hud_hide_timer.timeout.connect(self._begin_hud_fade)
         self._hud_fade: Optional[QPropertyAnimation] = None
-        # Playlists: long interval + refetch when state.json fingerprint changes
-        self._state_path: Path = _default_go_librespot_state_path()
-        self._state_fp: Optional[str] = None
-        self._state_watcher: Optional[QFileSystemWatcher] = None
-        self._state_change_debounce = QTimer(self)
-        self._state_change_debounce.setSingleShot(True)
-        self._state_change_debounce.setInterval(500)
-        self._state_change_debounce.timeout.connect(self._on_state_file_debounced)
-        self._playlist_interval_ms = int(
-            os.environ.get("GOLIBRESPOT_PLAYLIST_INTERVAL_MS", str(5 * 60 * 1000))
-        )
-        self._playlist_first_delay_ms = int(
-            os.environ.get("GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS", "5000")
-        )
-        self._playlist_periodic = QTimer(self)
-        self._playlist_periodic.setInterval(
-            max(10_000, int(self._playlist_interval_ms))
-        )
-        self._playlist_periodic.timeout.connect(self._request_playlists_bg)
+        self._history = PlaybackHistory()
+        self._last_context_uri: str = ""
         # repeat: 0=off, 1=one track, 2=whole context
         self._repeat_mode: int = 0
         self._is_playing = False
@@ -452,19 +437,13 @@ class MainWindow(QMainWindow):
             self._cfg.base,
         )
         _log.info(
-            "playlists: state.json path %s; interval %s ms, first fetch in %s ms (env: "
-            "GOLIBRESPOT_STATE_PATH, GOLIBRESPOT_PLAYLIST_INTERVAL_MS, GOLIBRESPOT_PLAYLIST_FIRST_DELAY_MS)",
-            self._state_path,
-            self._playlist_interval_ms,
-            self._playlist_first_delay_ms,
+            "recent tracks: data dir %s (override JUKEBOX_GLS_DATA_DIR)",
+            self._history.data_dir(),
         )
         self._build_ui()
         self._wire_shortcuts()
         QTimer.singleShot(0, self._reflow_album_size)
-        self._install_state_file_watcher()
-        QTimer.singleShot(
-            self._playlist_first_delay_ms, self._start_playlist_periodic
-        )
+        self._apply_history_tiles()
 
         self._ws = QWebSocket()
         self._ws.connected.connect(self._on_ws_connected)
@@ -560,11 +539,6 @@ class MainWindow(QMainWindow):
                 font-weight: 600;
                 font-family: Palatino, Georgia, serif;
             }}
-            QLabel#PlaylistBanner {{
-                color: #c08060;
-                font-size: {b(14)}px;
-                font-family: Palatino, Georgia, serif;
-            }}
             QToolButton#PlaylistTile:hover:enabled {{
                 background-color: #3a3024;
                 border-color: #c9a43a;
@@ -592,14 +566,6 @@ class MainWindow(QMainWindow):
         _m = _s(24)
         root.setContentsMargins(_m, _m, _m, _m)
         root.setSpacing(_s(18))
-        self._playlist_banner = QLabel("")
-        self._playlist_banner.setObjectName("PlaylistBanner")
-        self._playlist_banner.setVisible(False)
-        self._playlist_banner.setWordWrap(True)
-        self._playlist_banner.setAlignment(
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
-        )
-        root.addWidget(self._playlist_banner)
 
         self.prev_btn = QPushButton("⏮")
         self.prev_btn.setFixedSize(_btn(88), _btn(88))
@@ -731,13 +697,13 @@ class MainWindow(QMainWindow):
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
-        # Far left / far right: six playlist tiles (icon + name; Web API + POST /player/play).
+        # Far left / far right: six recent-track tiles (cover + title; local history + POST /player/play).
         self._playlist_col_w = _s(220)
         self._playlist_tile_icon = self._load_playlist_tile_icon()
-        self._playlist_tiles: list[PlaylistTile] = []
-        self._playlist_left, tiles_l = self._make_playlist_column()
-        self._playlist_right, tiles_r = self._make_playlist_column()
-        self._playlist_tiles = tiles_l + tiles_r
+        self._history_tiles: list[HistoryTile] = []
+        self._playlist_left, tiles_l = self._make_history_column()
+        self._playlist_right, tiles_r = self._make_history_column()
+        self._history_tiles = tiles_l + tiles_r
 
         main_hero = QHBoxLayout()
         main_hero.setSpacing(_btn(20))
@@ -790,30 +756,35 @@ class MainWindow(QMainWindow):
             return QIcon()
         return svg_colored_icon(path, "#c9a43a", _btn(40))
 
-    def _make_playlist_column(self) -> tuple[QWidget, list[PlaylistTile]]:
+    def _make_history_column(self) -> tuple[QWidget, list[HistoryTile]]:
         w = QWidget()
         w.setFixedWidth(self._playlist_col_w)
         v = QVBoxLayout(w)
         v.setContentsMargins(0, _s(2), 0, 0)
         v.setSpacing(_s(8))
-        tiles: list[PlaylistTile] = []
+        tiles: list[HistoryTile] = []
         ipx = _btn(40)
         for _ in range(3):
-            t = PlaylistTile(
+            t = HistoryTile(
                 self._playlist_tile_icon,
                 ipx,
                 self._playlist_col_w,
             )
-            t.play_requested.connect(self._on_playlist_uri_play)
+            t.play_requested.connect(self._on_history_uri_play)
             tiles.append(t)
             v.addWidget(t, 0)
         v.addStretch(1)
         return w, tiles
 
-    def _set_playlist_banner(self, text: str) -> None:
-        t = (text or "").strip()
-        self._playlist_banner.setText(t)
-        self._playlist_banner.setVisible(bool(t))
+    @pyqtSlot()
+    def _apply_history_tiles(self) -> None:
+        rows: list[Optional[HistoryItem]] = list(self._history.items)
+        while len(rows) < 6:
+            rows.append(None)
+        rows = rows[:6]
+        for i, tile in enumerate(self._history_tiles):
+            pl = rows[i] if i < len(rows) else None
+            tile.set_history_item(pl, self._history, self._playlist_tile_icon)
 
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
@@ -901,6 +872,10 @@ class MainWindow(QMainWindow):
             return
         et = ev.get("type")
         data = ev.get("data")
+        if isinstance(data, dict):
+            cu = data.get("context_uri")
+            if isinstance(cu, str) and cu.strip():
+                self._last_context_uri = cu.strip()
         if et in ("playback_ready", "active"):
             self._request_status_bg()
         elif et == "metadata" and isinstance(data, dict):
@@ -965,114 +940,16 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True, name="gls-status").start()
 
-    @pyqtSlot()
-    def _start_playlist_periodic(self) -> None:
-        """First playlist fetch after startup; then `self._playlist_periodic` (minutes)."""
-        _log.info("playlists: running scheduled fetch (startup delay elapsed)")
-        self._request_playlists_bg()
-        if not self._playlist_periodic.isActive():
-            self._playlist_periodic.start()
+    def _record_track_history(self, tr: dict[str, Any]) -> None:
+        def schedule_refresh() -> None:
+            QTimer.singleShot(0, self._apply_history_tiles)
 
-    def _install_state_file_watcher(self) -> None:
-        p = self._state_path
-        if not p.is_file():
-            _log.info(
-                "playlists: state file not at %s — interval-only until file exists (see GOLIBRESPOT_STATE_PATH)",
-                p,
-            )
-            return
-        self._state_fp = _state_file_fingerprint(p)
-        self._state_watcher = QFileSystemWatcher(self)
-        if not self._state_watcher.addPath(str(p)):
-            _log.warning("playlists: failed to add watch for %s", p)
-            return
-        self._state_watcher.fileChanged.connect(self._on_state_file_changed)
-        _log.info(
-            "playlists: watching state.json at %s (fingerprint %s…)",
-            p,
-            (self._state_fp or "")[:32],
+        self._history.try_record(
+            self._last_context_uri,
+            tr,
+            on_persisted=schedule_refresh,
+            on_art_ready=schedule_refresh,
         )
-
-    @pyqtSlot(str)
-    def _on_state_file_changed(self, path: str) -> None:
-        _log.debug("playlists: state file change signal: %s", path)
-        self._state_change_debounce.start()
-
-    @pyqtSlot()
-    def _on_state_file_debounced(self) -> None:
-        p = self._state_path
-        if not p.is_file():
-            return
-        fp = _state_file_fingerprint(p)
-        if fp is None or fp == self._state_fp:
-            return
-        _log.info("playlists: state.json mtime/size changed, refetching")
-        self._state_fp = fp
-        self._request_playlists_bg()
-
-    def _request_playlists_bg(self) -> None:
-        _log.debug("playlists: background fetch scheduled")
-        def work() -> None:
-            try:
-                _log.debug("playlists: calling get_me_playlists(limit=6)")
-                pls = get_me_playlists(self._cfg, limit=6)
-                _log.info("playlists: got %d row(s) from API", len(pls))
-            except GlsApiError as e:
-                # Error already logged in gls-client (HTTP detail); only update UI
-                QTimer.singleShot(0, partial(self._on_playlists_failed, str(e)))
-                return
-            except Exception as e:
-                _log.exception("playlists: unexpected error")
-                QTimer.singleShot(
-                    0, partial(self._on_playlists_failed, str(e))
-                )
-                return
-            QTimer.singleShot(0, partial(self._on_playlists_ok, pls))
-
-        threading.Thread(
-            target=work, daemon=True, name="gls-playlists"
-        ).start()
-
-    @pyqtSlot(str)
-    def _on_playlists_failed(self, err: str) -> None:
-        msg = f"Playlists: {err[:400]}".strip() if (err or "").strip() else "Playlists: request failed (see log)."
-        _log.info("playlists: UI banner — %s", err[:200] if err else msg[:200])
-        self._set_playlist_banner(msg)
-        for tile in self._playlist_tiles:
-            tile.set_playlist(None, self._playlist_tile_icon)
-
-    @pyqtSlot(object)
-    def _on_playlists_ok(self, pls: object) -> None:
-        self._set_playlist_banner("")
-        _log.info("playlists UI: applying result type=%s", type(pls).__name__)
-        rows: list[Optional[MePlaylist]] = []
-        if isinstance(pls, list):
-            for x in pls:
-                if isinstance(x, MePlaylist):
-                    rows.append(x)
-        while len(rows) < 6:
-            rows.append(None)
-        rows = rows[:6]
-        n_ok = sum(1 for r in rows if r is not None and r.uri)
-        _log.info("playlists UI: %d tile(s) with valid uri (of 6)", n_ok)
-        for i, r in enumerate(rows):
-            if r is not None and r.uri:
-                _log.debug("  tile %d: %r", i, r.name)
-        if n_ok == 0 and isinstance(pls, list) and len(pls) == 0:
-            msg = "Playlists: none returned (is GET /web-api/v1/me/playlists allowed on this daemon?)"
-            _log.warning("playlists UI: %s", msg)
-            self._set_playlist_banner(msg)
-        for i, tile in enumerate(self._playlist_tiles):
-            pl = rows[i]
-            tile.set_playlist(pl, self._playlist_tile_icon)
-
-    @pyqtSlot(str)
-    def _on_playlist_uri_play(self, uri: str) -> None:
-        u = (uri or "").strip()
-        if not u.startswith("spotify:"):
-            return
-        _log.info("play playlist context %s", u)
-        self._post_bg("/player/play", {"uri": u, "paused": False})
 
     @pyqtSlot(str)
     def _on_status_failed(self, msg: str) -> None:
@@ -1141,6 +1018,7 @@ class MainWindow(QMainWindow):
         self._set_progress(self._position_ms, self._duration_ms)
         QTimer.singleShot(0, self._reflow_album_size)
         self._sync_pause_overlay()
+        self._record_track_history(tr)
 
     def _clear_track(self) -> None:
         self._is_paused = False
@@ -1187,6 +1065,14 @@ class MainWindow(QMainWindow):
                 _log.warning("%s", e)
 
         threading.Thread(target=run, daemon=True, name="gls-post").start()
+
+    @pyqtSlot(str)
+    def _on_history_uri_play(self, uri: str) -> None:
+        u = (uri or "").strip()
+        if not u.startswith("spotify:"):
+            return
+        _log.info("play saved URI %s", u)
+        self._post_bg("/player/play", {"uri": u, "paused": False})
 
     def _on_playpause(self) -> None:
         self._post_bg("/player/playpause", {})
@@ -1391,10 +1277,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._status_timer.stop()
         self._tick.stop()
-        self._playlist_periodic.stop()
-        self._state_change_debounce.stop()
-        if self._state_watcher is not None:
-            self._state_watcher.removePaths(self._state_watcher.files())
         self._hud_hide_timer.stop()
         if self._hud_fade is not None and self._hud_fade.state() == QAbstractAnimation.State.Running:
             self._hud_fade.stop()
