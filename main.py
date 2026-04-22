@@ -13,12 +13,14 @@ import logging
 import sys
 import threading
 from functools import partial
+from pathlib import Path
 from typing import Any, Optional
 
 from PyQt6.QtCore import (
     QAbstractAnimation,
-    Qt,
     QPropertyAnimation,
+    QSize,
+    Qt,
     QTimer,
     QUrl,
     pyqtSignal,
@@ -28,6 +30,7 @@ from PyQt6.QtGui import (
     QCloseEvent,
     QCursor,
     QFont,
+    QIcon,
     QKeySequence,
     QMouseEvent,
     QPixmap,
@@ -50,6 +53,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gls_client import GlsApiError, GlsConfig, get_json, post_json
+from icon_utils import svg_colored_icon
 
 _log = logging.getLogger("gls-frontend")
 
@@ -62,6 +66,9 @@ UI_DISPLAY_SCALE = 3.0
 def _s(n: float) -> int:
     """Scale a layout size (px, pt) by UI_DISPLAY_SCALE; minimum 1 pixel."""
     return max(1, int(round(n * UI_DISPLAY_SCALE)))
+
+
+_ICONS_DIR = Path(__file__).resolve().parent / "icons"
 
 
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
@@ -307,9 +314,9 @@ class MainWindow(QMainWindow):
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
             QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
             QPushButton {{
-                background-color: #4a3d32;
-                color: #1a120c;
-                border: 2px solid #7a623e;
+                background-color: #3a2e22;
+                color: #f5ecd8;
+                border: 3px solid #8a7558;
                 border-radius: {s(14)}px;
                 font-size: {s(22)}px;
                 font-weight: bold;
@@ -318,20 +325,42 @@ class MainWindow(QMainWindow):
                 min-width: {s(44)}px;
                 font-family: Palatino, Georgia, serif;
             }}
-            QPushButton:hover {{ background-color: #5c4d40; border-color: #9a7b4a; }}
-            QPushButton:pressed {{ background-color: #3d3228; }}
-            QPushButton:disabled {{ color: #5a5048; background-color: #2e2620; border-color: #4a4036; }}
+            QPushButton:hover {{ background-color: #4a3c30; border-color: #c9a43a; color: #fffaf0; }}
+            QPushButton:pressed {{ background-color: #241a10; border-color: #6a5a40; color: #e8dcc4; }}
+            QPushButton:disabled {{ color: #6a5a50; background-color: #2a2018; border-color: #4a4034; }}
             QPushButton#IconTransport {{
-                min-width: {s(70)}px; min-height: {s(70)}px; max-height: {s(80)}px; font-size: {s(30)}px; padding: {s(8)}px;
-                background-color: #3d3228; border: 2px solid #5a4a38; border-radius: {s(12)}px; color: #9a8a70;
+                min-width: {s(70)}px; min-height: {s(70)}px; max-height: {s(80)}px; padding: {s(8)}px;
+                background-color: #1e1810;
+                color: #e8dcc4;
+                border: 3px solid #6a5a45;
+                border-radius: {s(10)}px;
             }}
-            QPushButton#IconTransport:hover {{ border-color: #9a7b4a; }}
-            QPushButton#IconTransport:checked {{ color: #c9a43a; border: 3px solid #c9a43a; background-color: #4a3a20; }}
-            QPushButton#RepeatCycle {{ min-width: {s(70)}px; min-height: {s(70)}px; font-size: {s(30)}px; padding: {s(8)}px; border-radius: {s(12)}px; background-color: #3d3228; border: 2px solid #5a4a38; }}
-            QPushButton#RepeatCycle:hover {{ border-color: #9a7b4a; }}
-            QPushButton#RepeatCycle[repeatState="off"] {{ color: #4a3a2a; }}
-            QPushButton#RepeatCycle[repeatState="one"] {{ color: #c9a43a; border-color: #9a7b4a; }}
-            QPushButton#RepeatCycle[repeatState="all"] {{ color: #c9a43a; border-color: #c9a43a; }}
+            QPushButton#IconTransport:hover {{ background-color: #2a2218; border-color: #b09050; color: #fff8e8; }}
+            QPushButton#IconTransport:checked {{
+                background-color: #4a3610;
+                color: #ffe8a0;
+                border: 3px solid #e0b020;
+            }}
+            QPushButton#RepeatCycle {{
+                min-width: {s(70)}px; min-height: {s(70)}px; padding: {s(8)}px; border-radius: {s(10)}px;
+                color: #e8dcc4;
+            }}
+            QPushButton#RepeatCycle:hover {{ border-color: #b09050; background-color: #2a2218; }}
+            QPushButton#RepeatCycle[repeatState="off"] {{
+                background-color: #1a140e;
+                border: 3px solid #4a3a2a;
+                color: #5a4a3a;
+            }}
+            QPushButton#RepeatCycle[repeatState="one"] {{
+                background-color: #3a2a10;
+                border: 3px solid #c9a43a;
+                color: #ffe8a0;
+            }}
+            QPushButton#RepeatCycle[repeatState="all"] {{
+                background-color: #3a2a10;
+                border: 3px solid #d8b85a;
+                color: #fff8e0;
+            }}
             """
         )
         self.setWindowFlags(
@@ -450,7 +479,7 @@ class MainWindow(QMainWindow):
         center.addLayout(art_row, 1)
         center.addWidget(self.info_block, 0)
 
-        self.shuffle_btn = QPushButton("\U0001f500")  # 🔀 shuffle
+        self.shuffle_btn = QPushButton()
         self.shuffle_btn.setObjectName("IconTransport")
         self.shuffle_btn.setCheckable(True)
         self.shuffle_btn.setToolTip("Shuffle")
@@ -459,7 +488,9 @@ class MainWindow(QMainWindow):
         self.repeat_btn.setObjectName("RepeatCycle")
         self.repeat_btn.setToolTip("Repeat: off — tap to cycle (one / all)")
         self.repeat_btn.clicked.connect(self._on_repeat_cycle)
+        self._init_mode_icons()
         self._apply_repeat_ui()
+        self._refresh_shuffle_icon()
         self.mode_rail = QWidget()
         self.mode_rail.setFixedWidth(_s(88))
         mode_col = QVBoxLayout(self.mode_rail)
@@ -626,6 +657,7 @@ class MainWindow(QMainWindow):
         self.shuffle_btn.blockSignals(True)
         self.shuffle_btn.setChecked(on)
         self.shuffle_btn.blockSignals(False)
+        self._refresh_shuffle_icon()
 
     def _on_tick(self) -> None:
         if not self._is_playing or self._duration_ms <= 0:
@@ -839,20 +871,51 @@ class MainWindow(QMainWindow):
         self._post_bg("/player/volume", {"volume": nv})
         self._sync_volume_display(nv, self._vol_max, force_hud=True)
 
+    def _init_mode_icons(self) -> None:
+        """Lucide SVGs (see icons/ATTRIBUTION.txt); stroke colors match retro brass/cream."""
+        px = _s(34)
+        self._mode_icon_px = px
+        sz = QSize(px, px)
+        self.shuffle_btn.setIconSize(sz)
+        self.repeat_btn.setIconSize(sz)
+
+        def load(name: str, color: str) -> QIcon:
+            path = _ICONS_DIR / name
+            if not path.is_file():
+                _log.warning("Missing icon file: %s", path)
+                return QIcon()
+            return svg_colored_icon(path, color, px)
+
+        self._shuffle_icon_off = load("shuffle.svg", "#b89868")
+        self._shuffle_icon_on = load("shuffle.svg", "#ffe8a8")
+        self._repeat_icon_off = load("repeat.svg", "#6a5848")
+        self._repeat_icon_one = load("repeat-1.svg", "#f5edd0")
+        self._repeat_icon_all = load("repeat.svg", "#f8f0e0")
+
+    def _refresh_shuffle_icon(self) -> None:
+        self.shuffle_btn.setIcon(
+            self._shuffle_icon_on
+            if self.shuffle_btn.isChecked()
+            else self._shuffle_icon_off
+        )
+        self.shuffle_btn.setText("")
+
     def _on_shuffle(self, on: bool) -> None:
+        self._refresh_shuffle_icon()
         self._post_bg("/player/shuffle_context", {"shuffle_context": on})
 
     def _apply_repeat_ui(self) -> None:
         m = self._repeat_mode
         if m == 0:
-            self.repeat_btn.setText("\U0001f501")  # 🔁 (off: dim via style)
+            self.repeat_btn.setIcon(self._repeat_icon_off)
             self.repeat_btn.setProperty("repeatState", "off")
         elif m == 1:
-            self.repeat_btn.setText("\U0001f502")  # 🔂 repeat one
+            self.repeat_btn.setIcon(self._repeat_icon_one)
             self.repeat_btn.setProperty("repeatState", "one")
         else:
-            self.repeat_btn.setText("\U0001f501")  # 🔁 repeat all
+            self.repeat_btn.setIcon(self._repeat_icon_all)
             self.repeat_btn.setProperty("repeatState", "all")
+        self.repeat_btn.setText("")
         tips = ("Repeat: off", "Repeat one", "Repeat all")
         self.repeat_btn.setToolTip(tips[m])
         self._polish_repeat_btn()
