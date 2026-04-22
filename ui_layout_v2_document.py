@@ -12,7 +12,7 @@ UI_LAYOUT_V2_DOCUMENT: dict[str, Any] = {
         "x,y: null = center; <0 = from right/bottom. z: stack order. All keys x,y,w,h,z required."
     ),
     "elements": {
-        "artwork": {"x": 32, "y": 10, "w": 34, "h": 57, "z": 0},
+        "artwork": {"x": None, "y": 10, "w": 34, "h": 57, "z": 0},
         "prev": {"x": 33, "y": 57, "w": 8, "h": 10, "z": 40},
         "seek_back_30": {"x": 42, "y": 57, "w": 8, "h": 10, "z": 40},
         "seek_fwd_30": {"x": 50, "y": 57, "w": 8, "h": 10, "z": 40},
@@ -29,10 +29,9 @@ UI_LAYOUT_V2_DOCUMENT: dict[str, Any] = {
         "playlist_5": {"x": 88, "y": 26, "w": 8, "h": 13, "z": 10},
         "playlist_6": {"x": 88, "y": 40, "w": 8, "h": 13, "z": 10},
         "playlist_7": {"x": 88, "y": 55, "w": 8, "h": 13, "z": 10},
-        "title": {"x": 4, "y": 69, "w": 93, "h": 4, "z": 50},
-        "artist": {"x": 4, "y": 73, "w": 93, "h": 3, "z": 50},
-        "album": {"x": 4, "y": 76, "w": 93, "h": 3, "z": 50},
-        "sub_label": {"x": 4, "y": 79, "w": 93, "h": 2, "z": 55},
-        "progress": {"x": 4, "y": 89, "w": 93, "h": 2, "z": 60},
+        "title": {"x": None, "y": 69, "w": 93, "h": 4, "z": 50},
+        "artist": {"x": None, "y": 73, "w": 93, "h": 3, "z": 50},
+        "album": {"x": None, "y": 76, "w": 93, "h": 3, "z": 50},
+        "progress": {"x": None, "y": -1, "w": 93, "h": 5, "z": 60},
     },
 }

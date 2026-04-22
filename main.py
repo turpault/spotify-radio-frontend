@@ -8,7 +8,8 @@ Layout: built-in v2 in ``ui_layout_v2_document.UI_LAYOUT_V2_DOCUMENT``; override
 ``JUKEBOX_UI_LAYOUT`` JSON. ``w,h`` = size (one null ⇒ square, side from the other %); ``x,y`` =
 position (``null`` = center; < 0 = from right/bottom).
 
-Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
+Daemon / error / buffering status is a full-window dim overlay (``SubStatusModal``), above the main
+UI and under the volume HUD. Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
 ``~/.config/jukebox-frontend-go-librespot/``). Tap a tile to start that URI via the local player
 API (no Spotify Web / Connect REST client).
@@ -401,6 +402,50 @@ class VolumeOverlay(QFrame):
         self._sub.setText(f"{value} / {max_v}")
 
 
+class SubStatusModal(QFrame):
+    """
+    Full-window dim layer with centered status / error text, above the main central stack
+    and below the volume HUD. Clicks pass through to controls below.
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setObjectName("subStatusModal")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setStyleSheet(
+            f"#subStatusModal {{ background-color: rgba(10, 8, 6, 0.78); border: none; }}"
+        )
+        self.label = QLabel("", self)
+        self.label.setObjectName("subStatusModalLabel")
+        self.label.setWordWrap(True)
+        self.label.setAlignment(
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(_s(24), _s(24), _s(24), _s(24))
+        outer.setSpacing(0)
+        outer.addStretch(1)
+        row = QHBoxLayout()
+        row.setSpacing(0)
+        row.addStretch(1)
+        row.addWidget(self.label, 0, Qt.AlignmentFlag.AlignCenter)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(1)
+        self.hide()
+        for w in (self, *self.findChildren(QWidget)):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        w = max(1, self.width())
+        self.label.setMaximumWidth(int(w * 0.88))
+
+
 def _fg_post(path: str, body: Optional[dict[str, Any]], cfg: GlsConfig) -> None:
     post_json(path, body, cfg=cfg)
 
@@ -786,17 +831,12 @@ class MainWindow(QMainWindow):
         bf.setPointSize(_s(14))
         self.album_label.setFont(bf)
         self.album_label.setStyleSheet("color: #8a7a66;")
-        self.sub_label = QLabel("", parent=central)
-        self.sub_label.setWordWrap(True)
-        self.sub_label.setAlignment(_meta_align)
-        self.sub_label.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Maximum,
-        )
+        self._sub_status_modal = SubStatusModal(self)
+        self.sub_label = self._sub_status_modal.label
         sf = QFont()
         sf.setPointSize(_s(12))
         self.sub_label.setFont(sf)
-        self.sub_label.setStyleSheet("color: #8a7a66;")
+        self.sub_label.setStyleSheet("color: #c8b8a0;")
 
         self.shuffle_btn = QPushButton(parent=central)
         self.shuffle_btn.setObjectName("IconTransport")
@@ -871,7 +911,6 @@ class MainWindow(QMainWindow):
             "title": self.title_label,
             "artist": self.artist_label,
             "album": self.album_label,
-            "sub_label": self.sub_label,
             "progress": self._progress_row,
         }
         for i, tile in enumerate(self._history_tiles):
@@ -942,6 +981,23 @@ class MainWindow(QMainWindow):
         hh = min(hh, max(1, H - y_px))
         return (x_px, y_px, ww, hh)
 
+    def _set_sub_status_text(self, s: str) -> None:
+        """Status / error line in the full-window modal overlay; empty hides the overlay."""
+        self.sub_label.setText(s)
+        self._sync_sub_status_modal()
+
+    def _sync_sub_status_modal(self) -> None:
+        if self._sub_status_modal is None:
+            return
+        if not (self.sub_label.text() or "").strip():
+            self._sub_status_modal.hide()
+            return
+        self._sub_status_modal.setGeometry(0, 0, self.width(), self.height())
+        self._sub_status_modal.show()
+        self._sub_status_modal.raise_()
+        if self._volume_overlay is not None and self._volume_overlay.isVisible():
+            self._volume_overlay.raise_()
+
     def _apply_ui_layout(self) -> None:
         """Size/position from self._ui_elements (fractions of central widget); z = stack order."""
         cw = self.centralWidget()
@@ -967,6 +1023,8 @@ class MainWindow(QMainWindow):
         for _key, w in stack:
             if w is not None:
                 w.raise_()
+        if self._sub_status_modal is not None and self._sub_status_modal.isVisible():
+            self._sub_status_modal.raise_()
         if self._volume_overlay is not None:
             self._volume_overlay.raise_()
 
@@ -1007,6 +1065,8 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        if self._sub_status_modal is not None:
+            self._sub_status_modal.setGeometry(0, 0, self.width(), self.height())
         if self._volume_overlay is not None and self._volume_overlay.isVisible():
             self._volume_overlay.setGeometry(self._volume_hud_geometry())
         QTimer.singleShot(0, self._apply_ui_layout)
@@ -1122,7 +1182,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str)
     def _on_status_failed(self, msg: str) -> None:
-        self.sub_label.setText("Cannot reach go-librespot: " + msg)
+        self._set_sub_status_text("Cannot reach go-librespot: " + msg)
 
     @pyqtSlot(object, object)
     def _on_status_ok(self, root: object, st: object) -> None:
@@ -1130,9 +1190,9 @@ class MainWindow(QMainWindow):
         if isinstance(root, dict) and "playback_ready" in root:
             ready = bool(root.get("playback_ready"))
         if not ready:
-            self.sub_label.setText("Daemon starting (playback not ready yet)…")
+            self._set_sub_status_text("Daemon starting (playback not ready yet)…")
         else:
-            self.sub_label.setText("")
+            self._set_sub_status_text("")
 
         if not isinstance(st, dict):
             return
@@ -1152,7 +1212,7 @@ class MainWindow(QMainWindow):
         stop = bool(st.get("stopped"))
         buf = bool(st.get("buffering"))
         if buf:
-            self.sub_label.setText("Buffering…")
+            self._set_sub_status_text("Buffering…")
         can_tick = not paused and not stop and not buf
         self._is_playing = can_tick
         self._is_paused = bool(paused) and not bool(stop) and not bool(buf)
