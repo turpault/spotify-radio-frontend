@@ -34,7 +34,7 @@ from PyQt6.QtGui import (
     QResizeEvent,
     QShortcut,
 )
-from PyQt6.QtNetwork import QAbstractSocket, QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
     QApplication,
@@ -263,7 +263,6 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _on_ws_error(self, *_args: object) -> None:
         _log.warning("WebSocket error (will retry)")
-        self.conn_label.setText("WebSocket error — retrying…")
 
     def _build_ui(self) -> None:
         self.setWindowTitle("go-librespot")
@@ -286,17 +285,6 @@ class MainWindow(QMainWindow):
             QPushButton:hover { background-color: #5c4d40; border-color: #9a7b4a; }
             QPushButton:pressed { background-color: #3d3228; }
             QPushButton:disabled { color: #5a5048; background-color: #2e2620; border-color: #4a4036; }
-            QPushButton#PlayDial {
-                background-color: #4a3d32;
-                color: #f0e6d4;
-                border: 4px solid #c9a43a;
-                border-radius: 48px;
-                min-width: 96px;
-                min-height: 96px;
-                font-size: 28px;
-            }
-            QPushButton#PlayDial:hover { background-color: #5c4d40; border-color: #dcc060; }
-            QPushButton#PlayDial:pressed { background-color: #3d3228; }
             QPushButton#ModeToggle {
                 min-height: 52px;
                 min-width: 152px;
@@ -332,10 +320,6 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(18)
-
-        self.conn_label = QLabel("")
-        self.conn_label.setStyleSheet("color: #a89880; font-size: 13px;")
-        root.addWidget(self.conn_label)
 
         self.prev_btn = QPushButton("⏮")
         self.prev_btn.setFixedSize(88, 88)
@@ -460,16 +444,6 @@ class MainWindow(QMainWindow):
         toggles.addStretch()
         root.addLayout(toggles)
 
-        ctrl = QHBoxLayout()
-        ctrl.addStretch(1)
-        self.play_btn = QPushButton("▶")
-        self.play_btn.setObjectName("PlayDial")
-        self.play_btn.setFixedSize(96, 96)
-        self.play_btn.clicked.connect(self._on_playpause)
-        ctrl.addWidget(self.play_btn, 0, Qt.AlignmentFlag.AlignCenter)
-        ctrl.addStretch(1)
-        root.addLayout(ctrl)
-
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.NoFrame)
         sep.setFixedHeight(1)
@@ -500,13 +474,11 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
-        self.conn_label.setText("WebSocket connected to " + self._cfg.events_ws_url())
         self._request_status_bg()
 
     def _connect_websocket(self) -> None:
         url = self._cfg.events_ws_url()
         _log.info("WebSocket open %s", url)
-        self.conn_label.setText("Connecting to " + url + "…")
         self._ws.open(QUrl(url))
 
     @pyqtSlot()
@@ -529,13 +501,11 @@ class MainWindow(QMainWindow):
             self._apply_track(data)
         elif et == "playing":
             self._is_playing = True
-            self.play_btn.setText("⏸")
             if not self._tick.isActive():
                 self._tick.start()
         elif et in ("paused", "not_playing", "inactive"):
             self._is_playing = False
             self._tick.stop()
-            self.play_btn.setText("▶")
         elif et == "seek" and isinstance(data, dict):
             pos = int(data.get("position", 0))
             dur = int(data.get("duration", 0) or self._duration_ms)
@@ -584,7 +554,6 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _on_status_failed(self, msg: str) -> None:
         self.sub_label.setText("Cannot reach go-librespot: " + msg)
-        self.conn_label.setText("REST unreachable — is the daemon on " + self._cfg.base + "?")
 
     @pyqtSlot(object, object)
     def _on_status_ok(self, root: object, st: object) -> None:
@@ -596,16 +565,9 @@ class MainWindow(QMainWindow):
         else:
             self.sub_label.setText("")
 
-        ws_ok = self._ws.state() == QAbstractSocket.SocketState.ConnectedState
-        self.conn_label.setText(
-            "Connected · WebSocket " + ("open" if ws_ok else "reconnecting…")
-        )
-
         if not isinstance(st, dict):
             return
 
-        name = st.get("device_name") or st.get("device_id") or "device"
-        uname = st.get("username") or ""
         self._block_toggle(
             self.shuffle_toggle,
             bool(st.get("shuffle_context")),
@@ -618,7 +580,6 @@ class MainWindow(QMainWindow):
             self.repeat_track_toggle,
             bool(st.get("repeat_track")),
         )
-        st_line = name + (f" · {uname}" if uname else "")
 
         vol = st.get("volume")
         steps = st.get("volume_steps")
@@ -632,7 +593,6 @@ class MainWindow(QMainWindow):
             self.sub_label.setText("Buffering…")
         can_tick = not paused and not stop and not buf
         self._is_playing = can_tick
-        self.play_btn.setText("⏸" if can_tick else "▶")
         if can_tick and not self._tick.isActive():
             self._tick.start()
         if not can_tick:
@@ -640,11 +600,11 @@ class MainWindow(QMainWindow):
 
         tr = st.get("track")
         if isinstance(tr, dict):
-            self._apply_track(tr, hint=st_line)
+            self._apply_track(tr)
         else:
-            self._clear_track(hint=st_line)
+            self._clear_track()
 
-    def _apply_track(self, tr: dict[str, Any], *, hint: str = "") -> None:
+    def _apply_track(self, tr: dict[str, Any]) -> None:
         name = tr.get("name") or "—"
         artists = tr.get("artist_names") or []
         if isinstance(artists, list):
@@ -662,10 +622,8 @@ class MainWindow(QMainWindow):
         self._duration_ms = int(tr.get("duration", 0) or 0)
         self._position_ms = int(tr.get("position", 0) or 0)
         self._set_progress(self._position_ms, self._duration_ms)
-        if hint:
-            self.conn_label.setText(f"{hint} · track")
 
-    def _clear_track(self, *, hint: str = "") -> None:
+    def _clear_track(self) -> None:
         self.album_art.set_art_url(None)
         self.title_label.setText("No track")
         self.artist_label.setText("")
@@ -675,8 +633,6 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.elapsed_label.setText("0:00")
         self.duration_label.setText("0:00")
-        if hint:
-            self.conn_label.setText(hint)
 
     def _set_progress(self, pos_ms: int, dur_ms: int) -> None:
         self._position_ms = max(0, pos_ms)
