@@ -93,6 +93,33 @@ def _btn(n: float) -> int:
 
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
 
+_PLAYLIST_INSET = 0.03  # fraction of tile; margin on all sides for cover art area
+
+
+def _center_cover_pixmap(
+    source: QPixmap, tw: int, th: int
+) -> QPixmap:
+    """Scale to **cover** tw×th (crop overflow), center-cropped; smooth."""
+    if source.isNull() or tw < 1 or th < 1:
+        return source
+    scaled = source.scaled(
+        tw,
+        th,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    sw, sh = scaled.width(), scaled.height()
+    if sw < tw or sh < th:
+        return source.scaled(
+            tw,
+            th,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    x0 = (sw - tw) // 2
+    y0 = (sh - th) // 2
+    return scaled.copy(x0, y0, tw, th)
+
 
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
 _STYLE_ALBUM_PLACEHOLDER = (
@@ -393,20 +420,24 @@ class HistoryTile(QWidget):
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
-        v = QVBoxLayout(self)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
+        self._vlay = QVBoxLayout(self)
+        self._vlay.setContentsMargins(0, 0, 0, 0)
+        self._vlay.setSpacing(0)
         self._play_uri = ""
+        self._raw_cover: Optional[QPixmap] = None
         self._btn = QToolButton()
         self._btn.setObjectName("PlaylistTile")
         self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._btn.setIcon(tile_icon)
-        isz = max(1, int(icon_px))
-        self._btn.setIconSize(QSize(isz, isz))
+        self._btn.setIconSize(QSize(max(1, int(icon_px)), max(1, int(icon_px))))
         self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._btn.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self._btn.clicked.connect(self._on_btn)
-        v.addWidget(self._btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._vlay.addWidget(self._btn, 1)
         self._fallback_icon = tile_icon
         self._apply_empty()
 
@@ -414,11 +445,39 @@ class HistoryTile(QWidget):
         """Match icon to layout rect (json-driven geometry)."""
         w = int(max(8, col_w))
         h = int(max(8, row_h))
-        s = int(min(w, h))
         self.setFixedSize(w, h)
-        isz = max(8, int(s * 0.78))
-        self._btn.setIconSize(QSize(isz, isz))
-        self._btn.setFixedSize(s, s)
+        m = int(max(0, round(w * _PLAYLIST_INSET)))
+        m2 = int(max(0, round(h * _PLAYLIST_INSET)))
+        self._vlay.setContentsMargins(m, m2, m, m2)
+        # After layout, refresh cover fill size.
+        QTimer.singleShot(0, self._refresh_playlist_tile_art)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._refresh_playlist_tile_art()
+
+    def _draw_wh(self) -> tuple[int, int]:
+        w, h = self._btn.width(), self._btn.height()
+        return (max(1, w), max(1, h))
+
+    def _refresh_playlist_tile_art(self) -> None:
+        aw, ah = self._draw_wh()
+        if aw < 2 or ah < 2:
+            return
+        if self._raw_cover is not None and not self._raw_cover.isNull():
+            filled = _center_cover_pixmap(self._raw_cover, aw, ah)
+            self._btn.setIcon(QIcon(filled))
+            self._btn.setIconSize(QSize(aw, ah))
+            return
+        pm = self._fallback_icon.pixmap(
+            QSize(aw, ah),
+            QIcon.Mode.Normal,
+            QIcon.State.Off,
+        )
+        if pm is not None and not pm.isNull():
+            p2 = _center_cover_pixmap(pm, aw, ah)
+            self._btn.setIcon(QIcon(p2))
+            self._btn.setIconSize(QSize(aw, ah))
 
     def _on_btn(self) -> None:
         u = (self._play_uri or "").strip()
@@ -427,9 +486,11 @@ class HistoryTile(QWidget):
 
     def _apply_empty(self) -> None:
         self._play_uri = ""
+        self._raw_cover = None
         self._btn.setToolTip("")
         self._btn.setIcon(self._fallback_icon)
         self._btn.setEnabled(False)
+        self._refresh_playlist_tile_art()
 
     def set_history_item(
         self,
@@ -457,22 +518,17 @@ class HistoryTile(QWidget):
             tip = f"{tip}\n{pl}"
         self._btn.setToolTip(tip.strip())
         cp = history.resolve_cover(item)
-        isz = self._btn.iconSize()
-        iw, ih = isz.width(), isz.height()
         if cp is not None and cp.is_file():
             pix = QPixmap(str(cp))
             if not pix.isNull():
-                scaled = pix.scaled(
-                    iw,
-                    ih,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                self._btn.setIcon(QIcon(scaled))
+                self._raw_cover = pix
                 self._btn.setEnabled(True)
+                self._refresh_playlist_tile_art()
                 return
+        self._raw_cover = None
         self._btn.setIcon(tile_icon)
         self._btn.setEnabled(True)
+        self._refresh_playlist_tile_art()
 
 
 class MainWindow(QMainWindow):
@@ -642,7 +698,7 @@ class MainWindow(QMainWindow):
                 color: #d4c4a8;
                 border: {b(2)}px solid #6a5a40;
                 border-radius: {b(10)}px;
-                padding: {b(2)}px;
+                padding: 0;
                 min-width: 0;
                 min-height: 0;
             }}
