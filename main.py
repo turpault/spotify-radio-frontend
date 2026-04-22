@@ -21,9 +21,19 @@ from PyQt6.QtCore import (
     QPropertyAnimation,
     QTimer,
     QUrl,
+    pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QCloseEvent, QFont, QKeySequence, QPixmap, QResizeEvent, QShortcut
+from PyQt6.QtGui import (
+    QCloseEvent,
+    QCursor,
+    QFont,
+    QKeySequence,
+    QMouseEvent,
+    QPixmap,
+    QResizeEvent,
+    QShortcut,
+)
 from PyQt6.QtNetwork import QAbstractSocket, QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
@@ -53,6 +63,10 @@ _STYLE_ALBUM_PLACEHOLDER = (
 
 
 class AlbumArtLabel(QLabel):
+    """Album cover; left-click toggles play/pause (same as main play control)."""
+
+    clicked = pyqtSignal()
+
     def __init__(self, size: int = 280) -> None:
         super().__init__()
         self._art_size = size
@@ -60,8 +74,14 @@ class AlbumArtLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(_STYLE_ALBUM_PLACEHOLDER)
         self.setText("—")
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._nam = QNetworkAccessManager(self)
         self._active_reply: Optional[QNetworkReply] = None
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
     def set_art_url(self, url: Optional[str]) -> None:
         # Clear ref before abort(): abort() may synchronously emit finished and clear
@@ -328,6 +348,7 @@ class MainWindow(QMainWindow):
         art_row.setSpacing(16)
         art_row.addWidget(self.prev_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         self.album_art = AlbumArtLabel(300)
+        self.album_art.clicked.connect(self._on_playpause)
         art_row.addWidget(self.album_art, 0, Qt.AlignmentFlag.AlignTop)
         art_row.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         art_row.addStretch(1)
