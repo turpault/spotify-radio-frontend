@@ -269,13 +269,6 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(18)
 
-        title = QLabel("Spotify (go-librespot)")
-        tf = QFont()
-        tf.setPointSize(22)
-        tf.setBold(True)
-        title.setFont(tf)
-        root.addWidget(title)
-
         self.conn_label = QLabel("")
         self.conn_label.setStyleSheet("color: #888888;")
         root.addWidget(self.conn_label)
