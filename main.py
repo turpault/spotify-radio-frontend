@@ -71,7 +71,7 @@ _log = logging.getLogger("gls-frontend")
 UI_DISPLAY_SCALE = 3.0
 
 # Cover: multiply min(width, height) fit. ih/metadata fix is the main size win.
-ART_SIZE_MULT = 1.12
+ART_SIZE_MULT = 1.344  # 1.12 × 1.2 (20% larger central artwork)
 # Hard cap in window pixels (must match AlbumArtLabel.set_square_size max).
 ART_SIDE_MAX = 2400
 
@@ -616,7 +616,7 @@ class MainWindow(QMainWindow):
         art_row.setSpacing(_btn(6))
         art_row.setContentsMargins(0, 0, 0, 0)
         art_row.addLayout(left_nav, 0)
-        self.album_art = AlbumArtLabel(520)
+        self.album_art = AlbumArtLabel(624)
         self.album_art.clicked.connect(self._on_playpause)
         art_row.addWidget(self.album_art, 1, Qt.AlignmentFlag.AlignCenter)
         art_row.addLayout(right_nav, 0)
