@@ -656,23 +656,39 @@ class MainWindow(QMainWindow):
         self.album_label.setStyleSheet("color: #8a7a66;")
         info.addWidget(self.album_label, 0, Qt.AlignmentFlag.AlignHCenter)
         self.sub_label = QLabel("")
+        self.sub_label.setWordWrap(True)
         self.sub_label.setAlignment(_meta_align)
         sf = QFont()
         sf.setPointSize(_s(12))
         self.sub_label.setFont(sf)
         self.sub_label.setStyleSheet("color: #8a7a66;")
+        self.sub_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
         info.addWidget(self.sub_label, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.info_block.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Maximum,
         )
+        self.info_block.setMinimumWidth(0)
 
         center = QVBoxLayout()
         self._center_vgap = _s(14)
         center.setSpacing(self._center_vgap)
         center.addLayout(art_row, 1)
         center.addWidget(self.info_block, 0)
+        # QWidget wrapper so the hero row can shrink horizontally (layout min width
+        # is not forced by one long sub_label line; right playlist column stays visible).
+        self._center_column = QWidget()
+        self._center_column.setObjectName("centerColumn")
+        self._center_column.setLayout(center)
+        self._center_column.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self._center_column.setMinimumWidth(0)
 
         self.shuffle_btn = QPushButton()
         self.shuffle_btn.setObjectName("IconTransport")
@@ -697,8 +713,9 @@ class MainWindow(QMainWindow):
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         mode_col.addStretch(1)
 
-        # Far left / far right: six recent-track tiles (cover + title; local history + POST /player/play).
-        self._playlist_col_w = _s(220)
+        # Far left / far right: six recent-track tiles. Use _btn (½ design scale) for
+        # column width so two rails + center fit on screen; _s(220) was ~660px each at 3×.
+        self._playlist_col_w = _btn(200)
         self._playlist_tile_icon = self._load_playlist_tile_icon()
         self._history_tiles: list[HistoryTile] = []
         self._playlist_left, tiles_l = self._make_history_column()
@@ -707,11 +724,22 @@ class MainWindow(QMainWindow):
 
         main_hero = QHBoxLayout()
         main_hero.setSpacing(_btn(20))
+        main_hero.setContentsMargins(0, 0, 0, 0)
+        for w in (self._playlist_left, self._playlist_right):
+            w.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Preferred,
+            )
         main_hero.addWidget(self._playlist_left, 0, Qt.AlignmentFlag.AlignTop)
         main_hero.addWidget(self.vol_rail, 0, Qt.AlignmentFlag.AlignTop)
-        main_hero.addLayout(center, 1)
+        main_hero.addWidget(self._center_column, 1, Qt.AlignmentFlag.AlignTop)
         main_hero.addWidget(self.mode_rail, 0, Qt.AlignmentFlag.AlignTop)
         main_hero.addWidget(self._playlist_right, 0, Qt.AlignmentFlag.AlignTop)
+        main_hero.setStretch(0, 0)
+        main_hero.setStretch(1, 0)
+        main_hero.setStretch(2, 1)
+        main_hero.setStretch(3, 0)
+        main_hero.setStretch(4, 0)
         root.addLayout(main_hero, 1)
 
         self._volume_overlay = VolumeOverlay(self)
