@@ -6,7 +6,9 @@ Load UI layout for MainWindow. The built-in v2 document is
 **square**; side = the non-null value on its axis. **null** on ``x``/``y`` = center; negative
 ``x``/``y`` = inset from the right/bottom. In memory, fractions/``None``; v1: 0–1 floats. The
 ``overlays`` map uses the same rect rules; keys ``sub_status_modal`` and ``volume_hud`` place the
-status dim layer and the volume flash HUD.
+status dim layer and the volume flash HUD. Optional typography: document ``font`` with
+``default`` (family, size, optional bold), ``elements`` / ``overlays`` partials, and optional
+``font`` on any rect; ``elements.sub_label`` merges into overlay ``sub_status_modal`` for the status QLabel.
 """
 from __future__ import annotations
 
@@ -17,9 +19,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Optional
 
-from ui_layout_v2_document import UI_LAYOUT_V2_DOCUMENT
+from ui_layout_v2_document import UI_FONT_DOCUMENT, UI_LAYOUT_V2_DOCUMENT
 
 _log = logging.getLogger("gls-frontend.ui_layout")
+
+_FALLBACK_FAMILY = "Corben"
+_FALLBACK_SIZE = 14.0
 
 # Keep in sync with main.py
 UI_DISPLAY_SCALE = 3.0
@@ -307,9 +312,151 @@ REQUIRED_ELEMENT_KEYS: tuple[str, ...] = (
     "progress",
 )
 
-OPTIONAL_ELEMENT_KEYS: tuple[str, ...] = ("sub_label",)
+OPTIONAL_ELEMENT_KEYS: tuple[str, ...] = ("sub_label", "playlist_tile")
 
 REQUIRED_OVERLAY_KEYS: tuple[str, ...] = ("sub_status_modal", "volume_hud")
+
+
+def _merge_font_spec(a: dict[str, Any], b: Any) -> dict[str, Any]:
+    """Merge partial font dict ``b`` into ``a`` (family, size, optional bold, optional sub_size)."""
+    out = dict(a)
+    if not isinstance(b, dict):
+        return out
+    fam = b.get("family")
+    if isinstance(fam, str) and fam.strip():
+        out["family"] = fam.strip()
+    if b.get("size") is not None:
+        try:
+            s = float(b["size"])
+            if s > 0:
+                out["size"] = s
+        except (TypeError, ValueError):
+            pass
+    if b.get("sub_size") is not None:
+        try:
+            s = float(b["sub_size"])
+            if s > 0:
+                out["sub_size"] = s
+        except (TypeError, ValueError):
+            pass
+    if isinstance(b.get("bold"), bool):
+        out["bold"] = b["bold"]
+    return out
+
+
+def merge_font_document(override: Any) -> dict[str, Any]:
+    """Start from built-in :data:`UI_FONT_DOCUMENT`, merge optional layout ``font`` object."""
+    doc = deepcopy(UI_FONT_DOCUMENT)
+    if not isinstance(override, dict):
+        return doc
+    if "default" in override:
+        doc["default"] = _merge_font_spec(doc["default"], override["default"])
+    for bucket in ("elements", "overlays"):
+        raw = override.get(bucket)
+        if not isinstance(raw, dict):
+            continue
+        bucket_out = doc.setdefault(bucket, {})
+        for name, spec in raw.items():
+            if not isinstance(spec, dict):
+                continue
+            prev = bucket_out.get(name)
+            if not isinstance(prev, dict):
+                prev = {}
+            bucket_out[name] = _merge_font_spec(prev, spec)
+    return doc
+
+
+def _parse_inline_font(raw: Any) -> Optional[dict[str, Any]]:
+    """Rect-level ``font`` object; returns None if empty / invalid."""
+    if not isinstance(raw, dict):
+        return None
+    partial: dict[str, Any] = {}
+    fam = raw.get("family")
+    if isinstance(fam, str) and fam.strip():
+        partial["family"] = fam.strip()
+    if raw.get("size") is not None:
+        try:
+            s = float(raw["size"])
+            if s > 0:
+                partial["size"] = s
+        except (TypeError, ValueError):
+            pass
+    if raw.get("sub_size") is not None:
+        try:
+            s = float(raw["sub_size"])
+            if s > 0:
+                partial["sub_size"] = s
+        except (TypeError, ValueError):
+            pass
+    if isinstance(raw.get("bold"), bool):
+        partial["bold"] = raw["bold"]
+    return partial if partial else None
+
+
+def _attach_inline_font(out: dict[str, Any], k: str, v: Any) -> None:
+    if not isinstance(v, dict) or "font" not in v:
+        return
+    parsed = _parse_inline_font(v.get("font"))
+    if parsed:
+        out[k]["font"] = parsed
+    elif v.get("font") is not None:
+        _log.warning("ui layout: skip invalid font for %r", k)
+
+
+def resolve_font_for_key(
+    key: str,
+    rect: Optional[dict[str, Any]],
+    merged_doc: dict[str, Any],
+    *,
+    overlay: bool,
+) -> dict[str, Any]:
+    spec = dict(merged_doc["default"])
+    bucket = merged_doc["overlays"] if overlay else merged_doc["elements"]
+    if not overlay and key.startswith("playlist_"):
+        pto = bucket.get("playlist_tile")
+        if isinstance(pto, dict):
+            spec = _merge_font_spec(spec, pto)
+    if overlay and key == "sub_status_modal":
+        el_b = merged_doc.get("elements")
+        if isinstance(el_b, dict) and "sub_label" in el_b:
+            spec = _merge_font_spec(spec, el_b["sub_label"])
+    if key in bucket:
+        spec = _merge_font_spec(spec, bucket[key])
+    if rect is not None and isinstance(rect.get("font"), dict):
+        spec = _merge_font_spec(spec, rect["font"])
+    if not isinstance(spec.get("family"), str) or not spec["family"].strip():
+        spec["family"] = _FALLBACK_FAMILY
+    try:
+        sz = float(spec.get("size", 0))
+        if sz <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        spec["size"] = _FALLBACK_SIZE
+    return spec
+
+
+def attach_resolved_fonts(
+    elements: dict[str, dict[str, Any]],
+    merged_doc: dict[str, Any],
+    *,
+    overlay: bool,
+) -> None:
+    for key, rect in elements.items():
+        rect["font"] = resolve_font_for_key(key, rect, merged_doc, overlay=overlay)
+
+
+def auxiliary_font_specs(
+    merged_doc: dict[str, Any], elements: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    """Keys listed under ``font.elements`` that have no layout rect (e.g. sub_label)."""
+    aux: dict[str, dict[str, Any]] = {}
+    bucket = merged_doc.get("elements")
+    if not isinstance(bucket, dict):
+        return aux
+    for name in bucket:
+        if name not in elements:
+            aux[name] = resolve_font_for_key(name, None, merged_doc, overlay=False)
+    return aux
 
 
 def _rect_ok_v1_fracs(r: dict[str, Any]) -> bool:
@@ -415,6 +562,7 @@ def merge_ui_elements(
                 "h": None if v.get("h") is None else float(v["h"]),
                 "z": z_merged,
             }
+        _attach_inline_font(out, k, v)
     return out
 
 
@@ -468,6 +616,7 @@ def merge_ui_overlays(
                 "h": None if v.get("h") is None else float(v["h"]),
                 "z": z_merged,
             }
+        _attach_inline_font(out, k, v)
     return out
 
 
@@ -503,11 +652,27 @@ def load_ui_layout() -> dict[str, Any]:
             except (OSError, json.JSONDecodeError) as e:
                 _log.warning("ui layout: cannot read %s (%s); using built-in", p, e)
             else:
+                merged_font = merge_font_document(
+                    doc.get("font") if isinstance(doc, dict) else None
+                )
+                elements = merge_ui_elements(doc, defaults)
+                overlays = merge_ui_overlays(doc, odef)
+                attach_resolved_fonts(elements, merged_font, overlay=False)
+                attach_resolved_fonts(overlays, merged_font, overlay=True)
                 return {
-                    "elements": merge_ui_elements(doc, defaults),
-                    "overlays": merge_ui_overlays(doc, odef),
+                    "elements": elements,
+                    "overlays": overlays,
+                    "font": merged_font,
+                    "font_aux": auxiliary_font_specs(merged_font, elements),
                 }
+    merged_font = merge_font_document(doc_builtin.get("font"))
+    elements = merge_ui_elements(doc_builtin, defaults)
+    overlays = merge_ui_overlays(doc_builtin, odef)
+    attach_resolved_fonts(elements, merged_font, overlay=False)
+    attach_resolved_fonts(overlays, merged_font, overlay=True)
     return {
-        "elements": merge_ui_elements(doc_builtin, defaults),
-        "overlays": merge_ui_overlays(doc_builtin, odef),
+        "elements": elements,
+        "overlays": overlays,
+        "font": merged_font,
+        "font_aux": auxiliary_font_specs(merged_font, elements),
     }

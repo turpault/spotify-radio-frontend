@@ -1,0 +1,15 @@
+.DS_Store
+*.log
+*.pyc
+*.pyo
+
+# Spotify / local secrets (never commit)
+**/credentials.json
+.env
+.env.*
+!.env.example
+
+# Editors
+.idea/
+.vscode/
+*.swp

@@ -5,7 +5,8 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
 Layout: built-in v2 in ``ui_layout_v2_document.UI_LAYOUT_V2_DOCUMENT``; override via
-``JUKEBOX_UI_LAYOUT`` JSON. ``elements`` and ``overlays`` use the same ``w,h`` / ``x,y`` rules
+``JUKEBOX_UI_LAYOUT`` JSON (optional top-level ``font`` + per-rect ``font`` for family/size/bold).
+Bundled OFL fonts (Limelight, Corben, Share Tech Mono) load at startup. ``elements`` and ``overlays`` use the same ``w,h`` / ``x,y`` rules
 (percent of the **central** widget; one null on w|h → square). Overlays: ``sub_status_modal`` and
 ``volume_hud`` (higher ``z`` above lower ``z``). Daemon / error / buffering use ``SubStatusModal``. Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
@@ -24,6 +25,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
 from PyQt6.QtCore import (
     QAbstractAnimation,
     QPoint,
@@ -39,6 +41,7 @@ from PyQt6.QtGui import (
     QCloseEvent,
     QCursor,
     QFont,
+    QFontMetrics,
     QIcon,
     QKeySequence,
     QMouseEvent,
@@ -64,8 +67,15 @@ from PyQt6.QtWidgets import (
 )
 
 from gls_client import GlsApiError, GlsConfig, get_json, post_json
+from font_loader import load_bundled_fonts, qss_font_family
 from icon_utils import svg_colored_icon
 from playback_history import _MAX_ENTRIES, HistoryItem, PlaybackHistory
+from spotify_web_api import (
+    fetch_public_catalog_summary,
+    get_client_credentials_access_token_cached,
+    get_me_playlists,
+    log_playlist_rows_with_client_credentials,
+)
 from ui_layout_config import load_ui_layout
 
 _log = logging.getLogger("gls-frontend")
@@ -96,6 +106,20 @@ _ICONS_DIR = Path(__file__).resolve().parent / "icons"
 _PLAYLIST_INSET = 0.03  # fraction of tile; margin on all sides for cover art area
 
 
+def _context_kind_icon_path(kind: str) -> Path:
+    """SVG for Spotify context URI type (``playlist``, ``album``, …)."""
+    k = (kind or "").strip().lower()
+    m = {
+        "playlist": _ICONS_DIR / "list-music.svg",
+        "album": _ICONS_DIR / "context-album.svg",
+        "artist": _ICONS_DIR / "context-artist.svg",
+        "track": _ICONS_DIR / "context-track.svg",
+        "show": _ICONS_DIR / "context-show.svg",
+        "episode": _ICONS_DIR / "context-episode.svg",
+    }
+    return m.get(k, _ICONS_DIR / "context-default.svg")
+
+
 def _center_cover_pixmap(
     source: QPixmap, tw: int, th: int
 ) -> QPixmap:
@@ -122,11 +146,6 @@ def _center_cover_pixmap(
 
 
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
-_STYLE_ALBUM_PLACEHOLDER = (
-    f"background-color: #1a1510; color: #5a5048; border: {_s(3)}px solid #8b7355; "
-    f"border-radius: {_s(8)}px; font-size: {_s(18)}px; "
-    "font-family: Palatino, 'Times New Roman', serif;"
-)
 
 
 class AlbumArtLabel(QLabel):
@@ -139,9 +158,10 @@ class AlbumArtLabel(QLabel):
         self._art_w = w
         self._art_h = h
         self._raw_pix: Optional[QPixmap] = None
+        self._pause_typeface = ""
         self.setFixedSize(w, h)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet(_STYLE_ALBUM_PLACEHOLDER)
+        self.apply_placeholder_typography(qss_font_family("Palatino"), _s(18))
         self.setText("—")
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._nam = QNetworkAccessManager(self)
@@ -161,6 +181,16 @@ class AlbumArtLabel(QLabel):
         )
         self._pause_overlay.hide()
 
+    def apply_placeholder_typography(self, family_qss: str, size_px: int) -> None:
+        self.setStyleSheet(
+            f"background-color: #1a1510; color: #5a5048; border: {_s(3)}px solid #8b7355; "
+            f"border-radius: {_s(8)}px; font-size: {size_px}px; "
+            f"font-family: {family_qss}, Palatino, 'Times New Roman', serif;"
+        )
+
+    def set_pause_typeface(self, family: str) -> None:
+        self._pause_typeface = (family or "").strip()
+
     def set_pause_overlay_visible(self, show: bool) -> None:
         self._pause_visible = show
         if show:
@@ -177,7 +207,10 @@ class AlbumArtLabel(QLabel):
         f = self._pause_overlay.font()
         f.setPointSize(ps)
         f.setBold(True)
-        f.setStyleHint(QFont.StyleHint.SansSerif)
+        if self._pause_typeface:
+            f.setFamily(self._pause_typeface)
+        else:
+            f.setStyleHint(QFont.StyleHint.SansSerif)
         self._pause_overlay.setFont(f)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
@@ -293,6 +326,9 @@ class VolumeOverlay(QFrame):
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
+        self._typo_family = "Corben"
+        self._typo_pct_design = 44.0
+        self._typo_sub_design = 14.0
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setObjectName("volumeOverlay")
         self.setStyleSheet(
@@ -324,13 +360,15 @@ class VolumeOverlay(QFrame):
         self._pct = QLabel("0")
         self._pct.setObjectName("hudPercent")
         pf = QFont()
+        pf.setFamily(self._typo_family)
         pf.setPointSize(_s(44))
         pf.setBold(True)
         self._pct.setFont(pf)
         self._pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub = QLabel("")
         self._sub.setStyleSheet(
-            f"color: rgba(200, 185, 160, 0.75); font-size: {_s(14)}px;"
+            f"color: rgba(200, 185, 160, 0.75); font-size: {_s(14)}px; "
+            f"font-family: {qss_font_family(self._typo_family)};"
         )
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -361,6 +399,17 @@ class VolumeOverlay(QFrame):
         for w in (self, *self.findChildren(QWidget)):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
+    def configure_typography(
+        self, *, family: str, pct_design: float, sub_design: float
+    ) -> None:
+        self._typo_family = (family or "Corben").strip() or "Corben"
+        self._typo_pct_design = max(1.0, float(pct_design))
+        self._typo_sub_design = max(1.0, float(sub_design))
+        pf = self._pct.font()
+        pf.setFamily(self._typo_family)
+        self._pct.setFont(pf)
+        self.refit_to_bounds()
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self.refit_to_bounds()
@@ -383,11 +432,17 @@ class VolumeOverlay(QFrame):
         icf.setPointSize(max(10, int(d * 0.1)))
         self._icon.setFont(icf)
         pf = self._pct.font()
-        pf.setPointSize(max(12, int(d * 0.12)))
+        pf.setFamily(self._typo_family)
+        pf.setPointSize(
+            max(12, int(d * 0.12 * (self._typo_pct_design / 44.0)))
+        )
+        pf.setBold(True)
         self._pct.setFont(pf)
-        st = max(7, int(d * 0.04))
+        st = max(7, int(d * 0.04 * (self._typo_sub_design / 14.0)))
+        fam_q = qss_font_family(self._typo_family)
         self._sub.setStyleSheet(
-            f"color: rgba(200, 185, 160, 0.75); font-size: {st}px;"
+            f"color: rgba(200, 185, 160, 0.75); font-size: {st}px; "
+            f"font-family: {fam_q};"
         )
 
     def set_level(self, value: int, max_v: int) -> None:
@@ -448,8 +503,8 @@ def _fg_post(path: str, body: Optional[dict[str, Any]], cfg: GlsConfig) -> None:
     post_json(path, body, cfg=cfg)
 
 
-class HistoryTile(QWidget):
-    """Recent playlist: artwork or icon only; tap to play that URI. Tooltip has track/playlist text."""
+class _PlaylistArtHost(QWidget):
+    """Full-bleed playlist button with bottom caption (kind icon + elided name); caption ignores clicks."""
 
     play_requested = pyqtSignal(str)
 
@@ -460,52 +515,135 @@ class HistoryTile(QWidget):
         icon_px: int,
     ) -> None:
         super().__init__(parent)
-        self.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Fixed,
-        )
-        self._vlay = QVBoxLayout(self)
-        self._vlay.setContentsMargins(0, 0, 0, 0)
-        self._vlay.setSpacing(0)
-        self._play_uri = ""
         self._raw_cover: Optional[QPixmap] = None
-        self._btn = QToolButton()
+        self._fallback_icon = tile_icon
+        self._play_uri = ""
+        self._caption_full = ""
+        self._context_kind = ""
+        self._kind_color = "#c9a43a"
+        self._btn = QToolButton(self)
         self._btn.setObjectName("PlaylistTile")
         self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self._btn.setIcon(tile_icon)
         self._btn.setIconSize(QSize(max(1, int(icon_px)), max(1, int(icon_px))))
         self._btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._btn.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
         self._btn.clicked.connect(self._on_btn)
-        self._vlay.addWidget(self._btn, 1)
-        self._fallback_icon = tile_icon
-        self._apply_empty()
+        self._cap_wrap = QWidget(self)
+        self._cap_wrap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        rad = _s(3)
+        self._cap_wrap.setStyleSheet(
+            f"background-color: rgba(0, 0, 0, 0.58); border-radius: {rad}px;"
+        )
+        hbox = QHBoxLayout(self._cap_wrap)
+        hbox.setContentsMargins(_s(4), _s(2), _s(4), _s(2))
+        hbox.setSpacing(_s(4))
+        self._kind_icon_lbl = QLabel()
+        self._kind_icon_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._kind_icon_lbl.setScaledContents(True)
+        self._kind_icon_lbl.setFixedSize(_s(16), _s(16))
+        self._text = QLabel()
+        self._text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._text.setWordWrap(False)
+        self._text.setStyleSheet("color: #f2e8d8; background: transparent; border: none;")
+        hbox.addWidget(self._kind_icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        hbox.addWidget(self._text, 1, Qt.AlignmentFlag.AlignVCenter)
+        self._cap_wrap.hide()
+        self.apply_empty()
 
-    def refit(self, col_w: int, row_h: int) -> None:
-        """Match icon to layout rect (json-driven geometry)."""
-        w = int(max(8, col_w))
-        h = int(max(8, row_h))
-        self.setFixedSize(w, h)
-        m = int(max(0, round(w * _PLAYLIST_INSET)))
-        m2 = int(max(0, round(h * _PLAYLIST_INSET)))
-        self._vlay.setContentsMargins(m, m2, m, m2)
-        # After layout, refresh cover fill size.
-        QTimer.singleShot(0, self._refresh_playlist_tile_art)
+    def set_caption_font(self, font: QFont) -> None:
+        self._text.setFont(font)
+
+    def _on_btn(self) -> None:
+        u = (self._play_uri or "").strip()
+        if u.startswith("spotify:"):
+            self.play_requested.emit(u)
+
+    def apply_empty(self) -> None:
+        self._play_uri = ""
+        self._raw_cover = None
+        self._caption_full = ""
+        self._context_kind = ""
+        self._btn.setToolTip("")
+        self._btn.setIcon(self._fallback_icon)
+        self._btn.setEnabled(False)
+        self._cap_wrap.hide()
+        self._kind_icon_lbl.clear()
+        self._text.clear()
+        self.refresh_art()
+
+    def set_play_uri(self, uri: str) -> None:
+        self._play_uri = (uri or "").strip()
+
+    def set_cover_tooltip(self, tip: str) -> None:
+        self._btn.setToolTip(tip.strip())
+
+    def set_fallback_icon(self, ico: QIcon) -> None:
+        self._fallback_icon = ico
+
+    def set_raw_cover(self, pix: Optional[QPixmap]) -> None:
+        self._raw_cover = pix
+
+    def set_button_enabled(self, enabled: bool) -> None:
+        self._btn.setEnabled(enabled)
+
+    def set_context_caption(self, kind: str, label: str) -> None:
+        self._context_kind = (kind or "").strip().lower()
+        self._caption_full = (label or "").strip()
+        if not self._context_kind and not self._caption_full:
+            self._cap_wrap.hide()
+            self._kind_icon_lbl.clear()
+            self._text.clear()
+            return
+        self._cap_wrap.show()
+        path = _context_kind_icon_path(self._context_kind)
+        ipx = max(_s(14), 16)
+        if path.is_file():
+            self._kind_icon_lbl.setPixmap(
+                svg_colored_icon(path, self._kind_color, ipx).pixmap(ipx, ipx)
+            )
+        else:
+            self._kind_icon_lbl.clear()
+        self._layout_caption_bar()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._refresh_playlist_tile_art()
+        self._btn.setGeometry(0, 0, self.width(), self.height())
+        self._layout_caption_bar()
+        self._refresh_art()
+        if self._cap_wrap.isVisible():
+            self._cap_wrap.raise_()
 
-    def _draw_wh(self) -> tuple[int, int]:
-        w, h = self._btn.width(), self._btn.height()
-        return (max(1, w), max(1, h))
+    def _layout_caption_bar(self) -> None:
+        if not self._cap_wrap.isVisible():
+            return
+        h = self.height()
+        w = self.width()
+        if h < 8 or w < 8:
+            return
+        fm = QFontMetrics(self._text.font())
+        cap_h = min(max(fm.height() + _s(8), _s(24)), max(_s(24), h // 3))
+        self._cap_wrap.setGeometry(0, h - cap_h, w, cap_h)
+        icon_side = max(_s(12), min(cap_h - _s(6), _s(28)))
+        self._kind_icon_lbl.setFixedSize(icon_side, icon_side)
+        margin_lr = _s(8)
+        spacing = _s(4)
+        avail_text = w - icon_side - margin_lr - spacing - _s(4)
+        if avail_text < _s(24):
+            avail_text = w - margin_lr
+        elided = fm.elidedText(
+            self._caption_full,
+            Qt.TextElideMode.ElideRight,
+            max(_s(24), avail_text),
+        )
+        self._text.setText(elided)
 
-    def _refresh_playlist_tile_art(self) -> None:
-        aw, ah = self._draw_wh()
+    def refresh_art(self) -> None:
+        self._refresh_art()
+        self._layout_caption_bar()
+
+    def _refresh_art(self) -> None:
+        aw, ah = max(1, self._btn.width()), max(1, self._btn.height())
         if aw < 2 or ah < 2:
             return
         if self._raw_cover is not None and not self._raw_cover.isNull():
@@ -523,18 +661,56 @@ class HistoryTile(QWidget):
             self._btn.setIcon(QIcon(p2))
             self._btn.setIconSize(QSize(aw, ah))
 
-    def _on_btn(self) -> None:
-        u = (self._play_uri or "").strip()
-        if u.startswith("spotify:"):
-            self.play_requested.emit(u)
 
-    def _apply_empty(self) -> None:
-        self._play_uri = ""
-        self._raw_cover = None
-        self._btn.setToolTip("")
-        self._btn.setIcon(self._fallback_icon)
-        self._btn.setEnabled(False)
-        self._refresh_playlist_tile_art()
+class HistoryTile(QWidget):
+    """Recent playlist: artwork, bottom caption (context kind + name), tap to play."""
+
+    play_requested = pyqtSignal(str)
+
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        tile_icon: QIcon,
+        icon_px: int,
+    ) -> None:
+        super().__init__(parent)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
+        self._vlay = QVBoxLayout(self)
+        self._vlay.setContentsMargins(0, 0, 0, 0)
+        self._vlay.setSpacing(0)
+        self._host = _PlaylistArtHost(self, tile_icon, icon_px)
+        self._host.play_requested.connect(self.play_requested.emit)
+        self._vlay.addWidget(self._host, 1)
+
+    def set_caption_typography(self, font_spec: dict[str, Any]) -> None:
+        f = QFont()
+        f.setFamily(str(font_spec.get("family") or "Corben"))
+        try:
+            ptz = int(float(font_spec.get("size", 14)))
+        except (TypeError, ValueError):
+            ptz = 14
+        f.setPointSize(_s(ptz))
+        bold = font_spec.get("bold")
+        f.setBold(bold if isinstance(bold, bool) else True)
+        self._host.set_caption_font(f)
+        self._host.refresh_art()
+
+    def refit(self, col_w: int, row_h: int) -> None:
+        """Match tile to layout rect (json-driven geometry)."""
+        w = int(max(8, col_w))
+        h = int(max(8, row_h))
+        self.setFixedSize(w, h)
+        m = int(max(0, round(w * _PLAYLIST_INSET)))
+        m2 = int(max(0, round(h * _PLAYLIST_INSET)))
+        self._vlay.setContentsMargins(m, m2, m, m2)
+        QTimer.singleShot(0, self._host.refresh_art)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._host.refresh_art()
 
     def set_history_item(
         self,
@@ -542,15 +718,15 @@ class HistoryTile(QWidget):
         history: PlaybackHistory,
         tile_icon: QIcon,
     ) -> None:
-        self._fallback_icon = tile_icon
+        self._host.set_fallback_icon(tile_icon)
         if item is None:
-            self._apply_empty()
+            self._host.apply_empty()
             return
         u = item.play_uri()
         if not u.startswith("spotify:"):
-            self._apply_empty()
+            self._host.apply_empty()
             return
-        self._play_uri = u
+        self._host.set_play_uri(u)
         art = ", ".join(item.artist_names) if item.artist_names else ""
         pl = (item.context_uri or "").strip()
         tip = f"{(item.name or '—').strip()}"
@@ -560,19 +736,19 @@ class HistoryTile(QWidget):
             tip = f"{tip}\n{(item.album_name or '').strip()}"
         if pl:
             tip = f"{tip}\n{pl}"
-        self._btn.setToolTip(tip.strip())
+        self._host.set_cover_tooltip(tip.strip())
+        self._host.set_context_caption(item.context_kind, item.context_label)
         cp = history.resolve_cover(item)
         if cp is not None and cp.is_file():
             pix = QPixmap(str(cp))
             if not pix.isNull():
-                self._raw_cover = pix
-                self._btn.setEnabled(True)
-                self._refresh_playlist_tile_art()
+                self._host.set_raw_cover(pix)
+                self._host.set_button_enabled(True)
+                self._host.refresh_art()
                 return
-        self._raw_cover = None
-        self._btn.setIcon(tile_icon)
-        self._btn.setEnabled(True)
-        self._refresh_playlist_tile_art()
+        self._host.set_raw_cover(None)
+        self._host.set_button_enabled(True)
+        self._host.refresh_art()
 
 
 class MainWindow(QMainWindow):
@@ -642,10 +818,14 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         self.setWindowTitle("go-librespot")
         b = _btn
+        _ui_layout = load_ui_layout()
+        self._ui_elements = _ui_layout["elements"]
+        self._overlay_layout = _ui_layout["overlays"]
+        _fam_ui = qss_font_family(_ui_layout["font"]["default"]["family"])
         self.setStyleSheet(
             f"""
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
-            QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
+            QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: {_fam_ui}, Palatino, Georgia, serif; }}
             QWidget#artFrame {{
                 background: transparent;
                 border: 1px solid rgba(100, 88, 70, 0.4);
@@ -684,7 +864,7 @@ class MainWindow(QMainWindow):
                 padding: {b(12)}px {b(20)}px;
                 min-height: {b(44)}px;
                 min-width: {b(44)}px;
-                font-family: Palatino, Georgia, serif;
+                font-family: {_fam_ui}, Palatino, Georgia, serif;
             }}
             QPushButton:hover {{ background-color: #4a3c30; border-color: #c9a43a; color: #fffaf0; }}
             QPushButton:pressed {{ background-color: #241a10; border-color: #6a5a40; color: #e8dcc4; }}
@@ -769,9 +949,6 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        _ui_layout = load_ui_layout()
-        self._ui_elements: dict[str, Any] = _ui_layout["elements"]
-        self._overlay_layout: dict[str, Any] = _ui_layout["overlays"]
         # Element rects: 0–1 fracs of the central widget; see ui_layout_v2_document.
         self._ui_rect_map: dict[str, QWidget] = {}
 
@@ -804,6 +981,11 @@ class MainWindow(QMainWindow):
 
         self.album_art = AlbumArtLabel(500, 500)
         self.album_art.clicked.connect(self._on_playpause)
+        _arts = self._ui_elements["artwork"]["font"]
+        self.album_art.apply_placeholder_typography(
+            qss_font_family(_arts["family"]), _s(int(_arts["size"]))
+        )
+        self.album_art.set_pause_typeface(_arts["family"])
         self._art_frame = ArtworkFrameHost(central, self.album_art)
         self._art_frame.setObjectName("artFrame")
 
@@ -811,31 +993,42 @@ class MainWindow(QMainWindow):
         self.title_label.setWordWrap(True)
         self.title_label.setAlignment(_meta_align)
         self.title_label.setSizePolicy(_meta_w[0], _meta_w[1])
+        _ts = self._ui_elements["title"]["font"]
         tfont = QFont()
-        tfont.setPointSize(_s(20))
-        tfont.setBold(True)
+        tfont.setFamily(_ts["family"])
+        tfont.setPointSize(_s(int(_ts["size"])))
+        tfont.setBold(bool(_ts.get("bold", True)))
         self.title_label.setFont(tfont)
         self.artist_label = QLabel("", parent=central)
         self.artist_label.setWordWrap(True)
         self.artist_label.setAlignment(_meta_align)
         self.artist_label.setSizePolicy(_meta_w[0], _meta_w[1])
+        _as = self._ui_elements["artist"]["font"]
         af = QFont()
-        af.setPointSize(_s(15))
+        af.setFamily(_as["family"])
+        af.setPointSize(_s(int(_as["size"])))
+        af.setBold(_as["bold"] if isinstance(_as.get("bold"), bool) else False)
         self.artist_label.setFont(af)
         self.artist_label.setStyleSheet("color: #c4b59a;")
         self.album_label = QLabel("", parent=central)
         self.album_label.setWordWrap(True)
         self.album_label.setAlignment(_meta_align)
         self.album_label.setSizePolicy(_meta_w[0], _meta_w[1])
+        _bs = self._ui_elements["album"]["font"]
         bf = QFont()
-        bf.setPointSize(_s(14))
+        bf.setFamily(_bs["family"])
+        bf.setPointSize(_s(int(_bs["size"])))
+        bf.setBold(_bs["bold"] if isinstance(_bs.get("bold"), bool) else False)
         self.album_label.setFont(bf)
         self.album_label.setStyleSheet("color: #8a7a66;")
         self._sub_status_modal = SubStatusModal(self)
         self.sub_label = self._sub_status_modal.label
-        sf = QFont()
-        sf.setPointSize(_s(12))
-        self.sub_label.setFont(sf)
+        _sm = self._overlay_layout["sub_status_modal"]["font"]
+        smf = QFont()
+        smf.setFamily(_sm["family"])
+        smf.setPointSize(_s(int(_sm["size"])))
+        smf.setBold(_sm["bold"] if isinstance(_sm.get("bold"), bool) else False)
+        self.sub_label.setFont(smf)
         self.sub_label.setStyleSheet("color: #c8b8a0;")
 
         self.shuffle_btn = QPushButton(parent=central)
@@ -864,9 +1057,12 @@ class MainWindow(QMainWindow):
             t.play_requested.connect(self._on_history_uri_play)
             self._history_tiles.append(t)
 
+        _ps = self._ui_elements["progress"]["font"]
+        _pw = "bold" if _ps.get("bold", True) else "normal"
         _time_style = (
-            "color: #d4c4a8; font-family: 'Courier New', Courier, monospace; "
-            f"font-size: {_s(15)}px; font-weight: bold;"
+            f"color: #d4c4a8; font-family: {qss_font_family(_ps['family'])}, "
+            f"'Courier New', Courier, monospace; "
+            f"font-size: {_s(int(_ps['size']))}px; font-weight: {_pw};"
         )
         self._progress_row = QWidget(parent=central)
         pl = QHBoxLayout(self._progress_row)
@@ -917,6 +1113,15 @@ class MainWindow(QMainWindow):
             self._ui_rect_map[f"playlist_{i}"] = tile
 
         self._volume_overlay = VolumeOverlay(self)
+        _vh = self._overlay_layout["volume_hud"]["font"]
+        _sub_sz = _vh.get("sub_size")
+        if _sub_sz is None:
+            _sub_sz = float(_vh["size"]) * (14.0 / 44.0)
+        self._volume_overlay.configure_typography(
+            family=_vh["family"],
+            pct_design=float(_vh["size"]),
+            sub_design=float(_sub_sz),
+        )
         self._volume_overlay.hide()
         self._apply_ui_layout()
 
@@ -1010,6 +1215,11 @@ class MainWindow(QMainWindow):
             w.setGeometry(x_px, y_px, ww, hh)
             if name.startswith("playlist_") and isinstance(w, HistoryTile):
                 w.refit(ww, hh)
+                rel = self._ui_elements.get(name)
+                if isinstance(rel, dict):
+                    fs = rel.get("font")
+                    if isinstance(fs, dict):
+                        w.set_caption_typography(fs)
             try:
                 z = int(r.get("z", 0))
             except (TypeError, ValueError):
@@ -1184,6 +1394,7 @@ class MainWindow(QMainWindow):
             tr,
             on_persisted=schedule_refresh,
             on_art_ready=schedule_refresh,
+            on_context_meta_ready=schedule_refresh,
         )
 
     @pyqtSlot(str)
@@ -1303,6 +1514,22 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=run, daemon=True, name="gls-post").start()
 
+    def _fetch_spotify_catalog_for_uri_bg(self, spotify_uri: str) -> None:
+        """Resolve ``spotify_uri`` via Web API (client credentials) without blocking the UI."""
+
+        def run() -> None:
+            tok = get_client_credentials_access_token_cached()
+            if not tok:
+                return
+            summary = fetch_public_catalog_summary(tok, spotify_uri)
+            _log.info(
+                "Spotify catalog (2LO) on playlist tile uri=%s -> %s",
+                spotify_uri,
+                summary,
+            )
+
+        threading.Thread(target=run, daemon=True, name="spotify-catalog").start()
+
     @pyqtSlot(str)
     def _on_history_uri_play(self, uri: str) -> None:
         u = (uri or "").strip()
@@ -1310,6 +1537,7 @@ class MainWindow(QMainWindow):
             return
         _log.info("play saved URI %s", u)
         self._post_bg("/player/play", {"uri": u, "paused": False})
+        self._fetch_spotify_catalog_for_uri_bg(u)
 
     def _on_playpause(self) -> None:
         self._post_bg("/player/playpause", {})
@@ -1569,13 +1797,25 @@ def _configure_logging() -> None:
 
 
 def main() -> None:
+    load_dotenv(Path(__file__).resolve().parent / ".env")
     _configure_logging()
     _log.info(
         "logging: level=%s (set GLS_LOG_LEVEL=DEBUG, optional GLS_LOG_FILE=…)",
         (os.environ.get("GLS_LOG_LEVEL") or "INFO").upper(),
     )
+    app_token = get_client_credentials_access_token_cached()
+    if app_token:
+        try:
+            pl_rows = get_me_playlists(limit=50, offset=0)
+            log_playlist_rows_with_client_credentials(app_token, pl_rows)
+        except Exception as e:
+            _log.warning(
+                "Spotify client-credentials (2LO): playlist list / URI decode failed: %s",
+                e,
+            )
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    load_bundled_fonts()
     w = MainWindow()
     w.showFullScreen()
     sys.exit(app.exec())

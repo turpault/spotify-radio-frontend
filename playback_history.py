@@ -3,7 +3,9 @@ Persist last N distinct **playlist (context)** URIs: track metadata as snapshot 
 
 ``context_uri`` from go-librespot WebSocket events is the playback context (playlist, album, …);
 we dedupe by that URI and only add when it is not already in the last eight entries. Uses
-``/status`` + WebSocket only (no Spotify Web API).
+``/status`` + WebSocket only (no Spotify Web API). When client credentials are
+configured, new rows also fetch public catalog metadata for the context URI
+(``context_kind``, ``context_label``).
 """
 
 from __future__ import annotations
@@ -20,6 +22,12 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from spotify_web_api import (
+    fetch_public_catalog_summary,
+    get_client_credentials_access_token_cached,
+    parse_spotify_uri,
+)
 
 _log = logging.getLogger("gls-frontend.history")
 
@@ -48,6 +56,8 @@ class HistoryItem:
     album_cover_url: Optional[str]
     cover_path: Optional[str]  # relative to data dir, e.g. covers/abc.jpg
     recorded_at: float
+    context_kind: str = ""  # spotify URI type: playlist, album, artist, …
+    context_label: str = ""  # catalog display name when resolved via Web API
 
     def play_uri(self) -> str:
         """Use playlist/context URI for POST /player/play."""
@@ -143,6 +153,8 @@ class PlaybackHistory:
                         cover_path=(str(row["cover_path"])
                                     if row.get("cover_path") else None),
                         recorded_at=float(row.get("recorded_at") or 0.0),
+                        context_kind=str(row.get("context_kind") or ""),
+                        context_label=str(row.get("context_label") or ""),
                     )
                 )
             except (TypeError, ValueError) as e:
@@ -168,6 +180,7 @@ class PlaybackHistory:
         *,
         on_persisted: Optional[Callable[[], None]] = None,
         on_art_ready: Optional[Callable[[], None]] = None,
+        on_context_meta_ready: Optional[Callable[[], None]] = None,
     ) -> Optional[HistoryItem]:
         """
         Record a new row only if ``context_uri`` (playlist / playback context) is a Spotify URI
@@ -224,7 +237,59 @@ class PlaybackHistory:
                 daemon=True,
                 name="gls-history-art",
             ).start()
+        threading.Thread(
+            target=self._enrich_context_catalog_bg,
+            args=(eid, pl, on_context_meta_ready),
+            daemon=True,
+            name="gls-history-context-meta",
+        ).start()
         return item
+
+    def _apply_context_meta(
+        self,
+        entry_id: str,
+        kind: str,
+        label: str,
+        on_done: Optional[Callable[[], None]],
+    ) -> None:
+        nk = (kind or "").strip().lower()
+        nl = (label or "").strip()
+        changed = False
+        with self._lock:
+            for i, it in enumerate(self._items):
+                if it.entry_id != entry_id:
+                    continue
+                if it.context_kind == nk and it.context_label == nl:
+                    break
+                self._items[i] = replace(
+                    it, context_kind=nk, context_label=nl
+                )
+                changed = True
+                try:
+                    self._save_locked()
+                except OSError as e:
+                    _log.debug("Re-save after context meta: %s", e)
+                break
+        if changed and on_done is not None:
+            on_done()
+
+    def _enrich_context_catalog_bg(
+        self,
+        entry_id: str,
+        context_uri: str,
+        on_done: Optional[Callable[[], None]],
+    ) -> None:
+        parsed = parse_spotify_uri(context_uri)
+        uri_kind = (parsed[0].lower() if parsed else "") or ""
+        tok = get_client_credentials_access_token_cached()
+        kind = uri_kind
+        label = ""
+        if tok:
+            summary = fetch_public_catalog_summary(tok, context_uri)
+            if not summary.get("error"):
+                kind = str(summary.get("kind") or uri_kind or "").lower()
+                label = str(summary.get("name") or "").strip()
+        self._apply_context_meta(entry_id, kind, label, on_done)
 
     def _download_cover_bg(
         self,
