@@ -68,6 +68,11 @@ def _s(n: float) -> int:
     return max(1, int(round(n * UI_DISPLAY_SCALE)))
 
 
+def _btn(n: float) -> int:
+    """Half of _s(n); all QPushButton / transport rail / mode icon sizes use this (50% vs prior UI)."""
+    return max(1, int(round(_s(n) * 0.5)))
+
+
 _ICONS_DIR = Path(__file__).resolve().parent / "icons"
 
 
@@ -308,7 +313,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self.setWindowTitle("go-librespot")
-        s = _s
+        b = _btn
         self.setStyleSheet(
             f"""
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
@@ -316,49 +321,49 @@ class MainWindow(QMainWindow):
             QPushButton {{
                 background-color: #3a2e22;
                 color: #f5ecd8;
-                border: 3px solid #8a7558;
-                border-radius: {s(14)}px;
-                font-size: {s(22)}px;
+                border: {b(3)}px solid #8a7558;
+                border-radius: {b(14)}px;
+                font-size: {b(22)}px;
                 font-weight: bold;
-                padding: {s(12)}px {s(20)}px;
-                min-height: {s(44)}px;
-                min-width: {s(44)}px;
+                padding: {b(12)}px {b(20)}px;
+                min-height: {b(44)}px;
+                min-width: {b(44)}px;
                 font-family: Palatino, Georgia, serif;
             }}
             QPushButton:hover {{ background-color: #4a3c30; border-color: #c9a43a; color: #fffaf0; }}
             QPushButton:pressed {{ background-color: #241a10; border-color: #6a5a40; color: #e8dcc4; }}
             QPushButton:disabled {{ color: #6a5a50; background-color: #2a2018; border-color: #4a4034; }}
             QPushButton#IconTransport {{
-                min-width: {s(70)}px; min-height: {s(70)}px; max-height: {s(80)}px; padding: {s(8)}px;
+                min-width: {b(70)}px; min-height: {b(70)}px; max-height: {b(80)}px; padding: {b(8)}px;
                 background-color: #1e1810;
                 color: #e8dcc4;
-                border: 3px solid #6a5a45;
-                border-radius: {s(10)}px;
+                border: {b(3)}px solid #6a5a45;
+                border-radius: {b(10)}px;
             }}
             QPushButton#IconTransport:hover {{ background-color: #2a2218; border-color: #b09050; color: #fff8e8; }}
             QPushButton#IconTransport:checked {{
                 background-color: #4a3610;
                 color: #ffe8a0;
-                border: 3px solid #e0b020;
+                border: {b(3)}px solid #e0b020;
             }}
             QPushButton#RepeatCycle {{
-                min-width: {s(70)}px; min-height: {s(70)}px; padding: {s(8)}px; border-radius: {s(10)}px;
+                min-width: {b(70)}px; min-height: {b(70)}px; padding: {b(8)}px; border-radius: {b(10)}px;
                 color: #e8dcc4;
             }}
             QPushButton#RepeatCycle:hover {{ border-color: #b09050; background-color: #2a2218; }}
             QPushButton#RepeatCycle[repeatState="off"] {{
                 background-color: #1a140e;
-                border: 3px solid #4a3a2a;
+                border: {b(3)}px solid #4a3a2a;
                 color: #5a4a3a;
             }}
             QPushButton#RepeatCycle[repeatState="one"] {{
                 background-color: #3a2a10;
-                border: 3px solid #c9a43a;
+                border: {b(3)}px solid #c9a43a;
                 color: #ffe8a0;
             }}
             QPushButton#RepeatCycle[repeatState="all"] {{
                 background-color: #3a2a10;
-                border: 3px solid #d8b85a;
+                border: {b(3)}px solid #d8b85a;
                 color: #fff8e0;
             }}
             """
@@ -377,31 +382,31 @@ class MainWindow(QMainWindow):
         root.setSpacing(_s(18))
 
         self.prev_btn = QPushButton("⏮")
-        self.prev_btn.setFixedSize(_s(88), _s(88))
+        self.prev_btn.setFixedSize(_btn(88), _btn(88))
         self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn = QPushButton("⏭")
-        self.next_btn.setFixedSize(_s(88), _s(88))
+        self.next_btn.setFixedSize(_btn(88), _btn(88))
         self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30 = QPushButton("−30s")
         self.seek_fwd_30 = QPushButton("+30s")
         for b in (self.seek_back_30, self.seek_fwd_30):
-            b.setMinimumSize(_s(88), _s(50))
+            b.setMinimumSize(_btn(88), _btn(50))
         self.seek_back_30.clicked.connect(self._on_seek_back_30)
         self.seek_fwd_30.clicked.connect(self._on_seek_fwd_30)
 
         left_nav = QVBoxLayout()
-        left_nav.setSpacing(_s(10))
+        left_nav.setSpacing(_btn(10))
         left_nav.addWidget(self.prev_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         left_nav.addWidget(self.seek_back_30, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav = QVBoxLayout()
-        right_nav.setSpacing(_s(10))
+        right_nav.setSpacing(_btn(10))
         right_nav.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self.volume_down = QPushButton("−")
         self.volume_up = QPushButton("+")
         for b in (self.volume_down, self.volume_up):
-            b.setFixedSize(_s(72), _s(72))
+            b.setFixedSize(_btn(72), _btn(72))
         self.volume_down.clicked.connect(self._on_volume_down)
         self.volume_up.clicked.connect(self._on_volume_up)
         self.vol_meta = QLabel("")
@@ -409,10 +414,10 @@ class MainWindow(QMainWindow):
             f"color: #7a6a58; font-size: {_s(15)}px; font-family: Palatino, Georgia, serif;"
         )
         self.vol_rail = QWidget()
-        self.vol_rail.setFixedWidth(_s(100))
+        self.vol_rail.setFixedWidth(_btn(100))
         vol_col = QVBoxLayout(self.vol_rail)
         vol_col.setContentsMargins(0, 0, 0, 0)
-        vol_col.setSpacing(_s(10))
+        vol_col.setSpacing(_btn(10))
         vol_lbl = QLabel("Volume")
         vol_lbl.setStyleSheet(
             f"color: #9a8a70; font-size: {_s(16)}px; font-weight: 600; "
@@ -425,7 +430,7 @@ class MainWindow(QMainWindow):
         vol_col.addStretch(1)
 
         art_row = QHBoxLayout()
-        art_row.setSpacing(_s(6))
+        art_row.setSpacing(_btn(6))
         art_row.setContentsMargins(0, 0, 0, 0)
         art_row.addLayout(left_nav, 0)
         self.album_art = AlbumArtLabel(480)
@@ -492,16 +497,16 @@ class MainWindow(QMainWindow):
         self._apply_repeat_ui()
         self._refresh_shuffle_icon()
         self.mode_rail = QWidget()
-        self.mode_rail.setFixedWidth(_s(88))
+        self.mode_rail.setFixedWidth(_btn(88))
         mode_col = QVBoxLayout(self.mode_rail)
         mode_col.setContentsMargins(0, 0, 0, 0)
-        mode_col.setSpacing(_s(12))
+        mode_col.setSpacing(_btn(12))
         mode_col.addWidget(self.shuffle_btn, 0, Qt.AlignmentFlag.AlignRight)
         mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignRight)
         mode_col.addStretch(1)
 
         main_hero = QHBoxLayout()
-        main_hero.setSpacing(_s(20))
+        main_hero.setSpacing(_btn(20))
         main_hero.addWidget(self.vol_rail, 0, Qt.AlignmentFlag.AlignTop)
         main_hero.addLayout(center, 1)
         main_hero.addWidget(self.mode_rail, 0, Qt.AlignmentFlag.AlignTop)
@@ -579,9 +584,9 @@ class MainWindow(QMainWindow):
         h = max(400, self.height())
         # Match _build_ui scaled margins, gaps, and transport column width (device pixels)
         root_m = _s(24) * 2
-        hero_gaps = _s(20) * 2
+        hero_gaps = _btn(20) * 2
         side_rails = self.vol_rail.width() + self.mode_rail.width()
-        navcol = _s(96)
+        navcol = _btn(96)
         max_w = w - root_m - hero_gaps - side_rails - 2 * navcol
         # root: main_hero, spacing, prog, spacing, sep(1), spacing, hint
         sp = _s(18)
@@ -873,7 +878,7 @@ class MainWindow(QMainWindow):
 
     def _init_mode_icons(self) -> None:
         """Lucide SVGs (see icons/ATTRIBUTION.txt); stroke colors match retro brass/cream."""
-        px = _s(34)
+        px = _btn(34)
         self._mode_icon_px = px
         sz = QSize(px, px)
         self.shuffle_btn.setIconSize(sz)
