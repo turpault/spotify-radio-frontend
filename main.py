@@ -54,7 +54,6 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
-    QStackedLayout,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -224,6 +223,33 @@ class AlbumArtLabel(QLabel):
         self._layout_pause_overlay()
         if self._pause_visible:
             self._pause_overlay.raise_()
+
+
+class ArtworkHost(QWidget):
+    """
+    Square cover with a child overlay; geometry is set manually so the cover is never
+    vertically collapsed (QStackedLayout+StackAll can size from the small overlay only).
+    """
+
+    def __init__(self, album: AlbumArtLabel, over: QWidget) -> None:
+        super().__init__()
+        self._album = album
+        self._over = over
+        album.setParent(self)
+        over.setParent(self)
+        over.raise_()
+        self.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        w, h = self.width(), self.height()
+        if w < 1 or h < 1:
+            return
+        self._album.setGeometry(0, 0, w, h)
+        self._over.setGeometry(0, 0, w, h)
+        self._over.raise_()
 
 
 class VolumeOverlay(QFrame):
@@ -469,10 +495,32 @@ class MainWindow(QMainWindow):
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
             QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
             QFrame#artTransportBar {{
-                background-color: rgba(255, 250, 240, 0.16);
+                background-color: rgba(40, 32, 24, 0.35);
                 border: none;
-                border-top: 1px solid rgba(220, 200, 170, 0.2);
+                border-top: 1px solid rgba(220, 200, 170, 0.18);
                 border-radius: 0 0 {b(10)}px {b(10)}px;
+            }}
+            QPushButton#ArtTransportBtn {{
+                background: transparent;
+                color: #f5ecd8;
+                border: {b(2)}px solid rgba(220, 200, 170, 0.42);
+                border-radius: {b(10)}px;
+                font-size: {b(18)}px;
+                font-weight: bold;
+                padding: {b(2)}px {b(4)}px;
+            }}
+            QPushButton#ArtTransportBtn:hover:enabled {{
+                background: rgba(255, 250, 240, 0.08);
+                border-color: rgba(230, 210, 180, 0.55);
+                color: #fffaf0;
+            }}
+            QPushButton#ArtTransportBtn:pressed:enabled {{
+                background: rgba(0, 0, 0, 0.22);
+            }}
+            QPushButton#ArtTransportBtn:disabled {{
+                color: #5a4a3a;
+                background: transparent;
+                border-color: #4a3a2a;
             }}
             QPushButton {{
                 background-color: #3a2e22;
@@ -587,6 +635,7 @@ class MainWindow(QMainWindow):
         self.seek_back_30 = QPushButton("−30s")
         self.seek_fwd_30 = QPushButton("+30s")
         for b in (self.prev_btn, self.next_btn, self.seek_back_30, self.seek_fwd_30):
+            b.setObjectName("ArtTransportBtn")
             b.setFixedSize(_btn(72), _trans_h)
         self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn.clicked.connect(self._on_next)
@@ -646,15 +695,7 @@ class MainWindow(QMainWindow):
         ovl.addWidget(self._art_top_clear, 1)
         ovl.addWidget(self._art_transport, 0)
 
-        self._art_host = QWidget()
-        _sl = QStackedLayout(self._art_host)
-        # StackAll: all children visible, but the *current* widget is raised (see QStackedLayout docs).
-        # We need the transport overlay on top; the first add becomes current by default, which hid the bar.
-        _sl.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        _sl.setContentsMargins(0, 0, 0, 0)
-        _sl.addWidget(self.album_art)
-        _sl.addWidget(self._art_over)
-        _sl.setCurrentWidget(self._art_over)
+        self._art_host = ArtworkHost(self.album_art, self._art_over)
 
         art_row = QHBoxLayout()
         art_row.setSpacing(0)
