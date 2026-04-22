@@ -4,6 +4,9 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
+Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path) defines each control as ``x, y, w, h`` in
+fractions 0-1 of the main central widget (window client area) width and height.
+
 Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
 ``~/.config/jukebox-frontend-go-librespot/``). Tap a tile to start that URI via the local player
@@ -63,6 +66,7 @@ from PyQt6.QtWidgets import (
 from gls_client import GlsApiError, GlsConfig, get_json, post_json
 from icon_utils import svg_colored_icon
 from playback_history import _MAX_ENTRIES, HistoryItem, PlaybackHistory
+from ui_layout_config import load_ui_layout
 
 _log = logging.getLogger("gls-frontend")
 
@@ -232,20 +236,14 @@ class AlbumArtLabel(QLabel):
 
 class ArtworkFrameHost(QWidget):
     """
-    Cover + bottom overlay. If the parent gives a non-square rect (w×h, h<w is the
-    “strip” bug), the label is a centered s×s square s=min(w,h) and the overlay still
-    fills the host so the transport bar stays at the true bottom of the frame.
+    Cover only; size/position from ui_layout.json. A centered min(w,h) square is used
+    for the pixmap so a non-square rect still shows correct aspect.
     """
 
-    def __init__(self, album: AlbumArtLabel, over: QWidget) -> None:
-        super().__init__()
+    def __init__(self, parent: QWidget, album: AlbumArtLabel) -> None:
+        super().__init__(parent)
         self._album = album
-        self._over = over
         album.setParent(self)
-        over.setParent(self)
-        over.raise_()
-        over.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        over.setAutoFillBackground(False)
         self.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
@@ -261,8 +259,6 @@ class ArtworkFrameHost(QWidget):
         y = (ah - s) // 2
         self._album.set_art_viewport(s, s)
         self._album.setGeometry(x, y, s, s)
-        self._over.setGeometry(0, 0, aw, ah)
-        self._over.raise_()
 
 
 class VolumeOverlay(QFrame):
@@ -386,13 +382,17 @@ class HistoryTile(QWidget):
 
     play_requested = pyqtSignal(str)
 
-    def __init__(self, tile_icon: QIcon, icon_px: int, col_w: int) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        tile_icon: QIcon,
+        icon_px: int,
+    ) -> None:
+        super().__init__(parent)
         self.setSizePolicy(
             QSizePolicy.Policy.Preferred,
             QSizePolicy.Policy.Fixed,
         )
-        self.setFixedWidth(int(col_w))
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
@@ -410,11 +410,12 @@ class HistoryTile(QWidget):
         self._fallback_icon = tile_icon
         self._apply_empty()
 
-    def refit(self, col_w: int, btn_side: int) -> None:
-        """Size tile and icon from hero height so a column of four does not clip."""
-        s = int(max(8, btn_side))
-        cw = int(max(8, col_w))
-        self.setFixedSize(cw, s)
+    def refit(self, col_w: int, row_h: int) -> None:
+        """Match icon to layout rect (json-driven geometry)."""
+        w = int(max(8, col_w))
+        h = int(max(8, row_h))
+        s = int(min(w, h))
+        self.setFixedSize(w, h)
         isz = max(8, int(s * 0.78))
         self._btn.setIconSize(QSize(isz, isz))
         self._btn.setFixedSize(s, s)
@@ -475,6 +476,25 @@ class HistoryTile(QWidget):
 
 
 class MainWindow(QMainWindow):
+    # Bottom → top for raise_ (controls above artwork).
+    _UI_RAISE_Z: tuple[str, ...] = ("artwork",) + tuple(
+        f"playlist_{i}" for i in range(8)
+    ) + (
+        "volume_up",
+        "volume_down",
+        "shuffle",
+        "repeat",
+        "prev",
+        "seek_back_30",
+        "seek_fwd_30",
+        "next",
+        "title",
+        "artist",
+        "album",
+        "sub_label",
+        "progress",
+    )
+
     def __init__(self) -> None:
         super().__init__()
         self._cfg = GlsConfig.from_env()
@@ -544,21 +564,14 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             f"""
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
-            /* Cover sits under this overlay; unnamed QWidget matched the base rule and hid art. */
-            QWidget#artOver, QWidget#artTopClear {{ background: transparent; border: none; }}
             QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
             QWidget#artFrame {{
                 background: transparent;
                 border: 1px solid rgba(100, 88, 70, 0.4);
                 border-radius: {b(10)}px;
             }}
-            QFrame#artTransportBar {{
-                background-color: rgba(40, 32, 24, 0.35);
-                border: none;
-                border-top: 1px solid rgba(220, 200, 170, 0.18);
-                border-radius: 0 0 {b(10)}px {b(10)}px;
-            }}
             QPushButton#ArtTransportBtn {{
+                min-width: 0; min-height: 0; max-width: 99999px; max-height: 99999px;
                 background: rgba(255, 250, 240, 0.10);
                 color: #f5ecd8;
                 border: {b(2)}px solid rgba(220, 200, 170, 0.42);
@@ -596,10 +609,10 @@ class MainWindow(QMainWindow):
             QPushButton:pressed {{ background-color: #241a10; border-color: #6a5a40; color: #e8dcc4; }}
             QPushButton:disabled {{ color: #6a5a50; background-color: #2a2018; border-color: #4a4034; }}
             QPushButton#VolumeStepBtn {{
-                min-width: {b(72)}px;
-                min-height: {b(72)}px;
-                max-width: {b(80)}px;
-                max-height: {b(80)}px;
+                min-width: 0;
+                min-height: 0;
+                max-width: 99999px;
+                max-height: 99999px;
                 padding: {b(8)}px;
                 background-color: #1e1810;
                 color: #e8dcc4;
@@ -611,7 +624,7 @@ class MainWindow(QMainWindow):
                 border-color: #b09050;
             }}
             QPushButton#IconTransport {{
-                min-width: {b(70)}px; min-height: {b(70)}px; max-height: {b(80)}px; padding: {b(8)}px;
+                min-width: 0; min-height: 0; max-width: 99999px; max-height: 99999px; padding: {b(8)}px;
                 background-color: #1e1810;
                 color: #e8dcc4;
                 border: {b(3)}px solid #6a5a45;
@@ -624,7 +637,7 @@ class MainWindow(QMainWindow):
                 border: {b(3)}px solid #e0b020;
             }}
             QPushButton#RepeatCycle {{
-                min-width: {b(70)}px; min-height: {b(70)}px; padding: {b(8)}px; border-radius: {b(10)}px;
+                min-width: 0; min-height: 0; max-width: 99999px; max-height: 99999px; padding: {b(8)}px; border-radius: {b(10)}px;
                 color: #e8dcc4;
             }}
             QPushButton#RepeatCycle:hover {{ border-color: #b09050; background-color: #2a2218; }}
@@ -675,109 +688,43 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        _m = _s(24)
-        root.setContentsMargins(_m, _m, _m, _m)
-        # Spacing 0: vertical bands are sized by _apply_vertical_proportions (5+65+20+10%).
+        self._ui_elements = load_ui_layout()
+        # Percent-based rects (0–1) of the central widget; see ui_layout.json.
+        self._ui_rect_map: dict[str, QWidget] = {}
 
-        _trans_h = _btn(50)
-        _transPad = _s(8)
-        self._art_transport_h = 2 * _transPad + _trans_h
-        # Minimum width: padding + 4 equal buttons + 3 spacings (must fit in column with cover).
-        self._art_transport_min_w = 2 * _transPad + 4 * _btn(72) + 3 * _s(4)
+        _meta_align = (
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+        )
+        _meta_w = QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
 
-        self.prev_btn = QPushButton("⏮")
-        self.next_btn = QPushButton("⏭")
-        self.seek_back_30 = QPushButton("−30s")
-        self.seek_fwd_30 = QPushButton("+30s")
+        self.prev_btn = QPushButton("⏮", parent=central)
+        self.next_btn = QPushButton("⏭", parent=central)
+        self.seek_back_30 = QPushButton("−30s", parent=central)
+        self.seek_fwd_30 = QPushButton("+30s", parent=central)
         for b in (self.prev_btn, self.next_btn, self.seek_back_30, self.seek_fwd_30):
             b.setObjectName("ArtTransportBtn")
-            b.setFixedSize(_btn(72), _trans_h)
         self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30.clicked.connect(self._on_seek_back_30)
         self.seek_fwd_30.clicked.connect(self._on_seek_fwd_30)
 
         # Lucide volume-2 / volume-1 (see icons/ATTRIBUTION.txt) — up = louder, down = quieter.
-        self.volume_up = QPushButton()
+        self.volume_up = QPushButton(parent=central)
         self.volume_up.setObjectName("VolumeStepBtn")
         self.volume_up.setToolTip("Increase volume")
-        self.volume_down = QPushButton()
+        self.volume_down = QPushButton(parent=central)
         self.volume_down.setObjectName("VolumeStepBtn")
         self.volume_down.setToolTip("Decrease volume")
-        for b in (self.volume_up, self.volume_down):
-            b.setFixedSize(_btn(78), _btn(78))
         self._init_volume_icons()
         self.volume_up.clicked.connect(self._on_volume_up)
         self.volume_down.clicked.connect(self._on_volume_down)
-        self.vol_rail = QWidget()
-        self.vol_rail.setFixedWidth(_btn(100))
-        vol_col = QVBoxLayout(self.vol_rail)
-        vol_col.setContentsMargins(0, 0, 0, 0)
-        vol_col.setSpacing(_btn(10))
-        vol_col.addWidget(self.volume_up, 0, Qt.AlignmentFlag.AlignLeft)
-        vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
-        vol_col.addStretch(1)
 
         self.album_art = AlbumArtLabel(500, 500)
         self.album_art.clicked.connect(self._on_playpause)
-
-        self._art_transport = QFrame()
-        self._art_transport.setObjectName("artTransportBar")
-        tlay = QHBoxLayout(self._art_transport)
-        tlay.setContentsMargins(_transPad, _transPad, _transPad, _transPad)
-        tlay.setSpacing(_s(4))
-        tlay.addWidget(self.prev_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        tlay.addWidget(self.seek_back_30, 0, Qt.AlignmentFlag.AlignVCenter)
-        tlay.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignVCenter)
-        tlay.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-        tlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Top area forwards clicks to the cover; bar sits on the bottom inside the W×W frame.
-        self._art_top_clear = QWidget()
-        self._art_top_clear.setObjectName("artTopClear")
-        self._art_top_clear.setAutoFillBackground(False)
-        self._art_top_clear.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
-        self._art_top_clear.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self._art_over = QWidget()
-        self._art_over.setObjectName("artOver")
-        ovl = QVBoxLayout(self._art_over)
-        ovl.setContentsMargins(0, 0, 0, 0)
-        ovl.setSpacing(0)
-        ovl.addWidget(self._art_top_clear, 1)
-        ovl.addWidget(self._art_transport, 0)
-
-        self._art_frame = ArtworkFrameHost(self.album_art, self._art_over)
+        self._art_frame = ArtworkFrameHost(central, self.album_art)
         self._art_frame.setObjectName("artFrame")
 
-        # Must use a row QWidget: a raw QHBoxLayout in QVBoxLayout can get a very short
-        # vertical cell while the art wants a large min width → wide thin strip (clipped art).
-        self._art_row_wrap = QWidget()
-        self._art_row_wrap.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Fixed,
-        )
-        art_row = QHBoxLayout(self._art_row_wrap)
-        art_row.setSpacing(0)
-        art_row.setContentsMargins(0, 0, 0, 0)
-        art_row.addStretch(1)
-        art_row.addWidget(self._art_frame, 0, Qt.AlignmentFlag.AlignHCenter)
-        art_row.addStretch(1)
-
-        _meta_align = (
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
-        )
-        self.info_block = QWidget()
-        info = QVBoxLayout(self.info_block)
-        info.setContentsMargins(0, 0, 0, 0)
-        # Do not set AlignHCenter on the vbox: it shrinks each row to min width, which
-        # breaks word wrap and clips long titles. Labels span full width; text is H-centered.
-        _meta_w = QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        self.title_label = QLabel("No track")
+        self.title_label = QLabel("No track", parent=central)
         self.title_label.setWordWrap(True)
         self.title_label.setAlignment(_meta_align)
         self.title_label.setSizePolicy(_meta_w[0], _meta_w[1])
@@ -785,8 +732,7 @@ class MainWindow(QMainWindow):
         tfont.setPointSize(_s(20))
         tfont.setBold(True)
         self.title_label.setFont(tfont)
-        info.addWidget(self.title_label, 0)
-        self.artist_label = QLabel("")
+        self.artist_label = QLabel("", parent=central)
         self.artist_label.setWordWrap(True)
         self.artist_label.setAlignment(_meta_align)
         self.artist_label.setSizePolicy(_meta_w[0], _meta_w[1])
@@ -794,8 +740,7 @@ class MainWindow(QMainWindow):
         af.setPointSize(_s(15))
         self.artist_label.setFont(af)
         self.artist_label.setStyleSheet("color: #c4b59a;")
-        info.addWidget(self.artist_label, 0)
-        self.album_label = QLabel("")
+        self.album_label = QLabel("", parent=central)
         self.album_label.setWordWrap(True)
         self.album_label.setAlignment(_meta_align)
         self.album_label.setSizePolicy(_meta_w[0], _meta_w[1])
@@ -803,8 +748,7 @@ class MainWindow(QMainWindow):
         bf.setPointSize(_s(14))
         self.album_label.setFont(bf)
         self.album_label.setStyleSheet("color: #8a7a66;")
-        info.addWidget(self.album_label, 0)
-        self.sub_label = QLabel("")
+        self.sub_label = QLabel("", parent=central)
         self.sub_label.setWordWrap(True)
         self.sub_label.setAlignment(_meta_align)
         self.sub_label.setSizePolicy(
@@ -815,88 +759,42 @@ class MainWindow(QMainWindow):
         sf.setPointSize(_s(12))
         self.sub_label.setFont(sf)
         self.sub_label.setStyleSheet("color: #8a7a66;")
-        info.addWidget(self.sub_label, 0)
 
-        self.info_block.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Preferred,
-        )
-        self.info_block.setMinimumWidth(0)
-
-        # Center column = album only (metadata lives in its own band below the hero).
-        center = QVBoxLayout()
-        center.setContentsMargins(0, 0, 0, 0)
-        center.setSpacing(0)
-        center.addStretch(1)
-        center.addWidget(self._art_row_wrap, 0, Qt.AlignmentFlag.AlignHCenter)
-        center.addStretch(1)
-        # QWidget wrapper so the hero row can shrink horizontally (layout min width
-        # is not forced by one long sub_label line; right playlist column stays visible).
-        self._center_column = QWidget()
-        self._center_column.setObjectName("centerColumn")
-        self._center_column.setLayout(center)
-        self._center_column.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self._center_column.setMinimumWidth(0)
-
-        self.shuffle_btn = QPushButton()
+        self.shuffle_btn = QPushButton(parent=central)
         self.shuffle_btn.setObjectName("IconTransport")
         self.shuffle_btn.setCheckable(True)
         self.shuffle_btn.setToolTip("Shuffle")
         self.shuffle_btn.toggled.connect(self._on_shuffle)
-        self.repeat_btn = QPushButton()
+        self.repeat_btn = QPushButton(parent=central)
         self.repeat_btn.setObjectName("RepeatCycle")
         self.repeat_btn.setToolTip("Repeat: off — tap to cycle (one / all)")
         self.repeat_btn.clicked.connect(self._on_repeat_cycle)
         self._init_mode_icons()
         self._apply_repeat_ui()
         self._refresh_shuffle_icon()
-        self.mode_rail = QWidget()
-        # b(70) + horizontal padding b(8)*2 is wider than b(88); fixed b(88) rail clipped the buttons.
-        _mode_w = max(_btn(100), _btn(70) + 2 * _btn(8) + 2 * _btn(3) + _s(12))
-        self.mode_rail.setFixedWidth(_mode_w)
-        mode_col = QVBoxLayout(self.mode_rail)
-        mode_col.setContentsMargins(0, 0, _s(4), 0)
-        mode_col.setSpacing(_btn(12))
-        mode_col.addWidget(self.shuffle_btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        mode_col.addWidget(self.repeat_btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        mode_col.addStretch(1)
 
-        # Far left / far right: four recent-playlist tiles per side (artwork only, no caption).
-        self._playlist_col_w = _btn(108)
         self._history_tile_icon_px = _btn(88)
         self._playlist_tile_icon = self._load_playlist_tile_icon()
         self._history_tiles: list[HistoryTile] = []
-        self._playlist_left, tiles_l = self._make_history_column()
-        self._playlist_right, tiles_r = self._make_history_column()
-        self._history_tiles = tiles_l + tiles_r
-
-        main_hero = QHBoxLayout()
-        main_hero.setSpacing(_btn(20))
-        main_hero.setContentsMargins(0, 0, 0, 0)
-        for w in (self._playlist_left, self._playlist_right):
-            w.setSizePolicy(
-                QSizePolicy.Policy.Fixed,
-                QSizePolicy.Policy.Preferred,
+        ipx = int(self._history_tile_icon_px)
+        for i in range(_MAX_ENTRIES):
+            t = HistoryTile(
+                central,
+                self._playlist_tile_icon,
+                ipx,
             )
-        main_hero.addWidget(self._playlist_left, 0, Qt.AlignmentFlag.AlignTop)
-        main_hero.addWidget(self.vol_rail, 0, Qt.AlignmentFlag.AlignTop)
-        main_hero.addWidget(self._center_column, 1, Qt.AlignmentFlag.AlignTop)
-        main_hero.addWidget(self.mode_rail, 0, Qt.AlignmentFlag.AlignTop)
-        main_hero.addWidget(self._playlist_right, 0, Qt.AlignmentFlag.AlignTop)
-        main_hero.setStretch(0, 0)
-        main_hero.setStretch(1, 0)
-        main_hero.setStretch(2, 1)
-        main_hero.setStretch(3, 0)
-        main_hero.setStretch(4, 0)
+            t.play_requested.connect(self._on_history_uri_play)
+            self._history_tiles.append(t)
 
-        self.elapsed_label = QLabel("0:00")
         _time_style = (
             "color: #d4c4a8; font-family: 'Courier New', Courier, monospace; "
             f"font-size: {_s(15)}px; font-weight: bold;"
         )
+        self._progress_row = QWidget(parent=central)
+        pl = QHBoxLayout(self._progress_row)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(_s(8))
+        self.elapsed_label = QLabel("0:00")
         self.elapsed_label.setStyleSheet(_time_style)
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(False)
@@ -918,59 +816,32 @@ class MainWindow(QMainWindow):
         )
         self.duration_label = QLabel("0:00")
         self.duration_label.setStyleSheet(_time_style)
-        prog = QHBoxLayout()
-        prog.addWidget(self.elapsed_label)
-        prog.addWidget(self.progress_bar, 1)
-        prog.addWidget(self.duration_label)
+        pl.addWidget(self.elapsed_label)
+        pl.addWidget(self.progress_bar, 1)
+        pl.addWidget(self.duration_label)
 
-        # Vertical bands: 5% top margin, 65% hero (art + rails), 20% track text, 10% progress.
-        self._root_margin = _m
-        self._section_top = QWidget()
-        self._section_top.setObjectName("sectionTop")
-        self._section_hero = QWidget()
-        self._section_hero.setObjectName("sectionHero")
-        self._section_info = QWidget()
-        self._section_info.setObjectName("sectionInfo")
-        self._section_prog = QWidget()
-        self._section_prog.setObjectName("sectionProg")
-        _sec_pol = QSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
-        for sec in (
-            self._section_top,
-            self._section_hero,
-            self._section_info,
-            self._section_prog,
-        ):
-            sec.setSizePolicy(_sec_pol)
-
-        hero_inner = QVBoxLayout(self._section_hero)
-        hero_inner.setContentsMargins(0, 0, 0, 0)
-        hero_inner.setSpacing(0)
-        hero_inner.addLayout(main_hero, 1)
-
-        info_inner = QVBoxLayout(self._section_info)
-        info_inner.setContentsMargins(0, 0, 0, 0)
-        info_inner.setSpacing(0)
-        info_inner.addStretch(1)
-        info_inner.addWidget(self.info_block, 0)
-        info_inner.addStretch(1)
-
-        prog_inner = QVBoxLayout(self._section_prog)
-        prog_inner.setContentsMargins(0, 0, 0, 0)
-        prog_inner.setSpacing(0)
-        prog_inner.addStretch(1)
-        prog_inner.addLayout(prog)
-        prog_inner.addStretch(1)
-
-        root.setSpacing(0)
-        root.addWidget(self._section_top)
-        root.addWidget(self._section_hero)
-        root.addWidget(self._section_info)
-        root.addWidget(self._section_prog)
+        self._ui_rect_map = {
+            "artwork": self._art_frame,
+            "prev": self.prev_btn,
+            "seek_back_30": self.seek_back_30,
+            "seek_fwd_30": self.seek_fwd_30,
+            "next": self.next_btn,
+            "volume_up": self.volume_up,
+            "volume_down": self.volume_down,
+            "shuffle": self.shuffle_btn,
+            "repeat": self.repeat_btn,
+            "title": self.title_label,
+            "artist": self.artist_label,
+            "album": self.album_label,
+            "sub_label": self.sub_label,
+            "progress": self._progress_row,
+        }
+        for i, tile in enumerate(self._history_tiles):
+            self._ui_rect_map[f"playlist_{i}"] = tile
 
         self._volume_overlay = VolumeOverlay(self)
         self._volume_overlay.hide()
+        self._apply_ui_layout()
 
     def _load_playlist_tile_icon(self) -> QIcon:
         path = _ICONS_DIR / "list-music.svg"
@@ -981,26 +852,29 @@ class MainWindow(QMainWindow):
             path, "#c9a43a", int(getattr(self, "_history_tile_icon_px", _btn(88)))
         )
 
-    def _make_history_column(self) -> tuple[QWidget, list[HistoryTile]]:
-        w = QWidget()
-        w.setFixedWidth(self._playlist_col_w)
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, _s(2), 0, 0)
-        v.setSpacing(_s(8))
-        tiles: list[HistoryTile] = []
-        ipx = int(getattr(self, "_history_tile_icon_px", _btn(88)))
-        n_per_col = _MAX_ENTRIES // 2
-        for _ in range(n_per_col):
-            t = HistoryTile(
-                self._playlist_tile_icon,
-                ipx,
-                self._playlist_col_w,
-            )
-            t.play_requested.connect(self._on_history_uri_play)
-            tiles.append(t)
-            v.addWidget(t, 0)
-        v.addStretch(1)
-        return w, tiles
+    def _apply_ui_layout(self) -> None:
+        """Size/position from self._ui_elements (fractions of central widget)."""
+        cw = self.centralWidget()
+        if cw is None or not self._ui_rect_map:
+            return
+        W, H = max(1, cw.width()), max(1, cw.height())
+        for name, w in self._ui_rect_map.items():
+            r = self._ui_elements.get(name)
+            if r is None:
+                continue
+            x = int(float(r["x"]) * W)
+            y = int(float(r["y"]) * H)
+            ww = int(float(r["w"]) * W)
+            hh = int(float(r["h"]) * H)
+            w.setGeometry(x, y, max(1, ww), max(1, hh))
+            if name.startswith("playlist_") and isinstance(w, HistoryTile):
+                w.refit(ww, hh)
+        for key in self._UI_RAISE_Z:
+            w = self._ui_rect_map.get(key)
+            if w is not None:
+                w.raise_()
+        if self._volume_overlay is not None:
+            self._volume_overlay.raise_()
 
     @pyqtSlot()
     def _apply_history_tiles(self) -> None:
@@ -1041,113 +915,10 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._volume_overlay is not None and self._volume_overlay.isVisible():
             self._volume_overlay.setGeometry(self._volume_hud_geometry())
-        self._apply_vertical_proportions()
-        QTimer.singleShot(0, self._reflow_album_size)
-
-    def _apply_vertical_proportions(self) -> None:
-        """5% / 65% / 20% / 10% of client height inside root margins (top inset + bands)."""
-        central = self.centralWidget()
-        if central is None:
-            return
-        rm = int(getattr(self, "_root_margin", _s(24)))
-        H = int(central.height()) - 2 * rm
-        if H < 80:
-            return
-        h5 = int(round(H * 0.05))
-        h65 = int(round(H * 0.65))
-        h20 = int(round(H * 0.20))
-        h10 = H - h5 - h65 - h20
-        if h10 < 1:
-            h10 = 1
-        for name, hh in (
-            ("_section_top", h5),
-            ("_section_hero", h65),
-            ("_section_info", h20),
-            ("_section_prog", h10),
-        ):
-            w = getattr(self, name, None)
-            if w is not None:
-                w.setFixedHeight(int(hh))
+        QTimer.singleShot(0, self._apply_ui_layout)
 
     def _layout_reflow(self) -> None:
-        self._apply_vertical_proportions()
-        self._reflow_album_size()
-
-    def _compute_album_side(self) -> int:
-        """Largest square for art from hero band height and center column width."""
-        side_rails = self.vol_rail.width() + self.mode_rail.width()
-        p_cols = 2 * int(getattr(self, "_playlist_col_w", 0) or 0)
-        win_w = max(400, self.width())
-        root_m = _s(24) * 2
-        hero_gaps = _btn(20) * 4
-        max_w = int(win_w - root_m - hero_gaps - side_rails - p_cols)
-
-        hero_h = 0
-        sh = getattr(self, "_section_hero", None)
-        if sh is not None and sh.height() > 0:
-            hero_h = int(sh.height())
-        else:
-            central = self.centralWidget()
-            if central is not None and central.height() > 0:
-                rm = int(getattr(self, "_root_margin", _s(24)))
-                H = int(central.height()) - 2 * rm
-                hero_h = max(100, int(round(H * 0.65)))
-            else:
-                hero_h = int(max(400, self.height()) * 0.4)
-
-        ccw = 0
-        cc = getattr(self, "_center_column", None)
-        if cc is not None and cc.width() > 0:
-            ccw = int(cc.width())
-
-        cap_w = min(max_w, hero_h) if ccw == 0 else min(max_w, hero_h, ccw)
-        fit = int(max(0, cap_w))
-        side = int(round(fit * float(ART_SIZE_MULT)))
-        bmin = int(getattr(self, "_art_transport_min_w", 0) or 0)
-        if bmin:
-            side = max(side, bmin)
-        cap_h = int(hero_h)
-        cap_w2 = int(ccw) if ccw > 0 else int(max_w)
-        side = min(int(side), int(max_w), cap_h, cap_w2, int(ART_SIDE_MAX))
-        return max(120, int(side))
-
-    def _reflow_playlist_tiles(self) -> None:
-        """Scale recent-tile height so four rows + gaps fit in the hero (no bottom clip)."""
-        if not self._history_tiles:
-            return
-        sh = getattr(self, "_section_hero", None)
-        if sh is None or sh.height() < 40:
-            return
-        hero_h = int(sh.height())
-        m_top = _s(2)
-        gap = _s(8)
-        n = _MAX_ENTRIES // 2
-        body = hero_h - m_top
-        avail = max(0, body - (n - 1) * gap)
-        per = (avail // n) if n else 0
-        per = max(_s(20), int(per))
-        if n * per + (n - 1) * gap + m_top > hero_h:
-            per = max(16, (body - (n - 1) * gap) // n) if n else 16
-        col_w = int(self._playlist_col_w)
-        per = min(int(per), col_w)
-        for t in self._history_tiles:
-            t.refit(col_w, per)
-        self._apply_history_tiles()
-
-    def _reflow_album_size(self) -> None:
-        w = int(self._compute_album_side())
-        w = max(120, min(int(w), int(ART_SIDE_MAX)))
-        sh = getattr(self, "_section_hero", None)
-        if sh is not None and sh.height() > 0:
-            w = min(int(w), int(sh.height()))
-        bar_h = int(getattr(self, "_art_transport_h", 0) or 0)
-        self._art_frame.setFixedSize(w, w)
-        self._art_transport.setFixedSize(w, bar_h)
-        self.album_art.set_art_viewport(w, w)
-        if getattr(self, "_art_row_wrap", None) is not None:
-            self._art_row_wrap.setFixedHeight(w)
-        self._art_frame.updateGeometry()
-        self._reflow_playlist_tiles()
+        self._apply_ui_layout()
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
@@ -1320,7 +1091,7 @@ class MainWindow(QMainWindow):
         self._duration_ms = int(tr.get("duration", 0) or 0)
         self._position_ms = int(tr.get("position", 0) or 0)
         self._set_progress(self._position_ms, self._duration_ms)
-        QTimer.singleShot(0, self._reflow_album_size)
+        QTimer.singleShot(0, self._apply_ui_layout)
         self._sync_pause_overlay()
         self._last_tr_for_history = dict(tr)
         self._record_track_history(tr)
@@ -1337,7 +1108,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.elapsed_label.setText("0:00")
         self.duration_label.setText("0:00")
-        QTimer.singleShot(0, self._reflow_album_size)
+        QTimer.singleShot(0, self._apply_ui_layout)
         self._sync_pause_overlay()
 
     def _sync_pause_overlay(self) -> None:
