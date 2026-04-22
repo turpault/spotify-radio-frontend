@@ -231,8 +231,9 @@ class AlbumArtLabel(QLabel):
 
 class ArtworkFrameHost(QWidget):
     """
-    Fixed W×W frame: the cover fills the square; a transparent top + transport strip
-    is stacked on top and aligned to the bottom (no QStackedLayout under-sizing).
+    Cover + bottom overlay. If the parent gives a non-square rect (w×h, h<w is the
+    “strip” bug), the label is a centered s×s square s=min(w,h) and the overlay still
+    fills the host so the transport bar stays at the true bottom of the frame.
     """
 
     def __init__(self, album: AlbumArtLabel, over: QWidget) -> None:
@@ -250,11 +251,16 @@ class ArtworkFrameHost(QWidget):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        w, h = self.width(), self.height()
-        if w < 1 or h < 1:
+        aw, ah = self.width(), self.height()
+        if aw < 1 or ah < 1:
             return
-        self._album.setGeometry(0, 0, w, h)
-        self._over.setGeometry(0, 0, w, h)
+        s = int(min(aw, ah))
+        s = max(1, s)
+        x = (aw - s) // 2
+        y = (ah - s) // 2
+        self._album.set_art_viewport(s, s)
+        self._album.setGeometry(x, y, s, s)
+        self._over.setGeometry(0, 0, aw, ah)
         self._over.raise_()
 
 
@@ -979,16 +985,32 @@ class MainWindow(QMainWindow):
         return max(120, side)
 
     def _reflow_album_size(self) -> None:
-        w = self._compute_album_side()
+        w0 = self._compute_album_side()
+        w = int(w0)
+        # The analytic formula for main_hero_h can be larger than the real center
+        # column, so w can exceed the row height  Qt compresses to a short wide band
+        # (clipped art). Clamp to the actual center & vertical room for the art row.
+        cc = getattr(self, "_center_column", None)
+        if cc is not None:
+            cc.updateGeometry()
+            self.info_block.updateGeometry()
+            ccw = int(cc.width())
+            cch = int(cc.height())
+            if cch > 0 and ccw > 0:
+                ih = self._info_area_height(cch)
+                room = cch - int(self._center_vgap) - int(ih)
+                room = max(64, min(room, cch - 1))
+                w = min(int(w0), int(ccw), int(room), int(ART_SIDE_MAX))
+        w = max(120, int(w))
         bar_h = int(getattr(self, "_art_transport_h", 0) or 0)
-        # Cover uses the full square; bar is drawn in the bottom strip of the same frame.
-        self.album_art.set_art_viewport(w, w)
         self._art_frame.setFixedSize(w, w)
         self._art_transport.setFixedSize(w, bar_h)
-        # Row must reserve exactly w px vertically so the center column does not
-        # collapse this cell to a short band (clipping the W×W frame to a strip).
+        # art viewport set in ArtworkFrameHost.resizeEvent; sync once in case
+        # setFixedSize did not change geometry (e.g. same w).
+        self.album_art.set_art_viewport(w, w)
         if getattr(self, "_art_row_wrap", None) is not None:
             self._art_row_wrap.setFixedHeight(w)
+        self._art_frame.updateGeometry()
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
