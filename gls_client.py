@@ -36,27 +36,35 @@ def _headers_as_lines(msg: object) -> str:
 def _log_http_error_response(
     method: str, url: str, err: HTTPError, body: bytes
 ) -> None:
-    """Log full response headers and body for failed HTTP responses (Spotify / proxy)."""
+    """
+    Log failed HTTP responses: one summary line, then headers, then body only if non-empty
+    (avoids noisy "empty body" warnings for 429, etc.).
+    """
+    h = err.headers
+    n = len(body)
+    ra = ""
+    if h is not None:
+        ra = (h.get("Retry-After") or "").strip()
+    ra_s = f" retry-after={ra!r}" if ra else ""
     _log.warning(
-        "HTTP error: %s %s -> %s %s",
+        "HTTP error: %s %s -> %s %s; response body %d bytes%s",
         method,
         url,
         err.code,
         getattr(err, "reason", "") or "",
+        n,
+        ra_s,
     )
-    h = err.headers
     if h is not None:
         _log.warning("Response headers:\n%s", _headers_as_lines(h).rstrip())
     else:
-        _log.warning("Response headers: (none)")
-    n = len(body)
+        _log.debug("Response headers: (none)")
     if n == 0:
-        _log.warning("Response body: (empty, 0 bytes)")
         return
     if n > _MAX_ERROR_BODY_LOG:
         chunk = body[:_MAX_ERROR_BODY_LOG].decode("utf-8", errors="replace")
         _log.warning(
-            "Response body: %d bytes (logging first %d only)\n%s",
+            "Response body: %d bytes (first %d logged)\n%s",
             n,
             _MAX_ERROR_BODY_LOG,
             chunk,

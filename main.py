@@ -1018,10 +1018,8 @@ class MainWindow(QMainWindow):
                 pls = get_me_playlists(self._cfg, limit=6)
                 _log.info("playlists: got %d row(s) from API", len(pls))
             except GlsApiError as e:
-                _log.warning("playlists: %s", e)
-                QTimer.singleShot(
-                    0, partial(self._on_playlists_failed, str(e))
-                )
+                # Error already logged in gls-client (HTTP detail); only update UI
+                QTimer.singleShot(0, partial(self._on_playlists_failed, str(e)))
                 return
             except Exception as e:
                 _log.exception("playlists: unexpected error")
@@ -1038,7 +1036,7 @@ class MainWindow(QMainWindow):
     @pyqtSlot(str)
     def _on_playlists_failed(self, err: str) -> None:
         msg = f"Playlists: {err[:400]}".strip() if (err or "").strip() else "Playlists: request failed (see log)."
-        _log.error("playlists UI: failed — %s", err)
+        _log.info("playlists: UI banner — %s", err[:200] if err else msg[:200])
         self._set_playlist_banner(msg)
         for tile in self._playlist_tiles:
             tile.set_playlist(None, self._playlist_tile_icon)
