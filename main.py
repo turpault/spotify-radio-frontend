@@ -5,7 +5,7 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
 Layout: ``ui_layout.json`` (or ``JUKEBOX_UI_LAYOUT`` path) defines each control as ``x, y, w, h`` in
-fractions 0-1 of the main central widget (window client area) width and height.
+whole **percent** 0-100 of the main central widget (v2; v1 0-1 fractions still load).
 
 Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or

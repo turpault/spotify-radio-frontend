@@ -1,7 +1,7 @@
 """
-Load percent-based (0-1) UI layout for MainWindow. Coordinates are fractions of
-the central widget's width (x, w) and height (y, h), matching the pre-layout
-go-librespot shell (5% + 65% + 20% + 10% vertical bands, hero rail columns).
+Load UI layout for MainWindow. On disk (``version`` 2) ``x,y,w,h`` are **whole
+percent 0–100** of the central widget (rounded). In memory, ``load_ui_layout()``
+feeds 0–1 fractions to the window. Version 1 files used 0–1 floats and remain supported.
 """
 from __future__ import annotations
 
@@ -34,6 +34,26 @@ def _n(W: float, H: float, x: float, y: float, w: float, h: float) -> dict[str, 
         "w": w / W,
         "h": h / H,
     }
+
+
+def _frac_to_pct_int(v: float) -> int:
+    """Round fraction in [0,1] to nearest whole percent in [0, 100]."""
+    return int(max(0, min(100, round(float(v) * 100.0))))
+
+
+def _elements_to_json_percent(
+    el: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, int]]:
+    out: dict[str, dict[str, int]] = {}
+    for k, r in el.items():
+        out[k] = {
+            "x": _frac_to_pct_int(r["x"]),
+            "y": _frac_to_pct_int(r["y"]),
+            "w": _frac_to_pct_int(r["w"]),
+            "h": _frac_to_pct_int(r["h"]),
+            "z": int(r["z"]),
+        }
+    return out
 
 
 # Stacking: lower z is painted first (further back); higher z is on top. Ties: sorted by name.
@@ -196,7 +216,7 @@ REQUIRED_ELEMENT_KEYS: tuple[str, ...] = (
 OPTIONAL_ELEMENT_KEYS: tuple[str, ...] = ("sub_label",)
 
 
-def _rect_ok(r: dict[str, Any]) -> bool:
+def _rect_ok_v1_fracs(r: dict[str, Any]) -> bool:
     try:
         x = float(r["x"])
         y = float(r["y"])
@@ -211,19 +231,45 @@ def _rect_ok(r: dict[str, Any]) -> bool:
     return x + w <= 1.001 and y + h <= 1.001
 
 
+def _rect_ok_v2_percent(r: dict[str, Any]) -> bool:
+    """0–100 (whole or fractional percent); same semantics as v1 in percent space."""
+    try:
+        x = float(r["x"])
+        y = float(r["y"])
+        w = float(r["w"])
+        h = float(r["h"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if w <= 0 or h <= 0:
+        return False
+    if not (-0.5 <= x <= 100.5 and -0.5 <= y <= 100.5):
+        return False
+    return x + w <= 100.5 and y + h <= 100.5
+
+
 def merge_ui_elements(
     data: Any, defaults: dict[str, dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
     out = deepcopy(defaults)
     if not isinstance(data, dict):
         return out
+    version = 1
+    try:
+        vraw = data.get("version", 1)
+        version = int(vraw) if vraw is not None else 1
+    except (TypeError, ValueError):
+        version = 1
+    if version < 1:
+        version = 1
     raw = data.get("elements") if "elements" in data else data
     if not isinstance(raw, dict):
         return out
+    is_v2 = version >= 2
     for k, v in raw.items():
         if k not in out or not isinstance(v, dict):
             continue
-        if not _rect_ok(v):
+        valid = _rect_ok_v2_percent(v) if is_v2 else _rect_ok_v1_fracs(v)
+        if not valid:
             _log.warning("ui layout: skip invalid rect for %r", k)
             continue
         z_prev = int(out[k].get("z", 0))
@@ -231,13 +277,22 @@ def merge_ui_elements(
             z_merged = int(v["z"])
         except (KeyError, TypeError, ValueError):
             z_merged = z_prev
-        out[k] = {
-            "x": float(v["x"]),
-            "y": float(v["y"]),
-            "w": float(v["w"]),
-            "h": float(v["h"]),
-            "z": z_merged,
-        }
+        if is_v2:
+            out[k] = {
+                "x": float(v["x"]) / 100.0,
+                "y": float(v["y"]) / 100.0,
+                "w": float(v["w"]) / 100.0,
+                "h": float(v["h"]) / 100.0,
+                "z": z_merged,
+            }
+        else:
+            out[k] = {
+                "x": float(v["x"]),
+                "y": float(v["y"]),
+                "w": float(v["w"]),
+                "h": float(v["h"]),
+                "z": z_merged,
+            }
     return out
 
 
@@ -249,13 +304,15 @@ def default_json_document() -> dict[str, Any]:
     for k in REQUIRED_ELEMENT_KEYS:
         if k not in d:
             _log.error("default_ui_elements missing %s", k)
+    pct = _elements_to_json_percent(d)
     return {
-        "version": 1,
+        "version": 2,
         "description": (
-            "x,y,w,h are fractions 0-1 of central widget size. "
+            "x,y,w,h are each 0-100 (whole percent, rounded) of the central "
+            "widget size (width for x and w, height for y and h). "
             "z is stack order: lower = further back, higher = on top (ties: name order)."
         ),
-        "elements": d,
+        "elements": pct,
     }
 
 
