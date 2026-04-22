@@ -24,6 +24,7 @@ from typing import Any, Optional
 from PyQt6.QtCore import (
     QAbstractAnimation,
     QPropertyAnimation,
+    QRect,
     QSize,
     Qt,
     QTimer,
@@ -310,22 +311,22 @@ class VolumeOverlay(QFrame):
         )
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        card = QFrame()
-        card.setObjectName("volumeHudCard")
-        inner = QVBoxLayout(card)
-        inner.setContentsMargins(_s(40), _s(36), _s(40), _s(36))
-        inner.setSpacing(_s(20))
-        inner.addWidget(self._icon, alignment=Qt.AlignmentFlag.AlignCenter)
-        inner.addWidget(self._pct, alignment=Qt.AlignmentFlag.AlignCenter)
-        inner.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignCenter)
-        inner.addWidget(self._sub, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._card = QFrame()
+        self._card.setObjectName("volumeHudCard")
+        self._inner = QVBoxLayout(self._card)
+        self._inner.setContentsMargins(_s(40), _s(36), _s(40), _s(36))
+        self._inner.setSpacing(_s(20))
+        self._inner.addWidget(self._icon, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._inner.addWidget(self._pct, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._inner.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._inner.addWidget(self._sub, alignment=Qt.AlignmentFlag.AlignCenter)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addStretch(1)
         row = QHBoxLayout()
         row.addStretch(1)
-        row.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(self._card, alignment=Qt.AlignmentFlag.AlignCenter)
         row.addStretch(1)
         outer.addLayout(row)
         outer.addStretch(1)
@@ -336,6 +337,35 @@ class VolumeOverlay(QFrame):
         self.hide()
         for w in (self, *self.findChildren(QWidget)):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.refit_to_bounds()
+
+    def refit_to_bounds(self) -> None:
+        """Scale HUD card to match artwork-sized overlay (not full window)."""
+        w, h = self.width(), self.height()
+        if w < 8 or h < 8:
+            return
+        d = int(min(w, h))
+        m = max(_s(8), min(_s(36), d // 8))
+        self._inner.setContentsMargins(m, m, m, m)
+        sp = max(_s(6), min(_s(20), d // 16))
+        self._inner.setSpacing(sp)
+        bar_w = max(_s(48), min(int(d * 0.72), w - 2 * m))
+        self._bar.setMinimumWidth(int(bar_w * 0.4))
+        self._bar.setMaximumWidth(bar_w)
+        self._bar.setFixedHeight(max(_s(8), min(_s(16), d // 28)))
+        icf = self._icon.font()
+        icf.setPointSize(max(10, int(d * 0.1)))
+        self._icon.setFont(icf)
+        pf = self._pct.font()
+        pf.setPointSize(max(12, int(d * 0.12)))
+        self._pct.setFont(pf)
+        st = max(7, int(d * 0.04))
+        self._sub.setStyleSheet(
+            f"color: rgba(200, 185, 160, 0.75); font-size: {st}px;"
+        )
 
     def set_level(self, value: int, max_v: int) -> None:
         max_v = max(1, int(max_v))
@@ -983,10 +1013,22 @@ class MainWindow(QMainWindow):
             if qk is not None:
                 QShortcut(QKeySequence(qk), self, activated=fn)
 
+    def _volume_hud_geometry(self) -> QRect:
+        """Size/position the volume HUD to match the album frame (QMainWindow coords)."""
+        af = getattr(self, "_art_frame", None)
+        if (
+            af is None
+            or af.width() < 2
+            or af.height() < 2
+        ):
+            return QRect(0, 0, max(1, self.width()), max(1, self.height()))
+        top_left = af.mapTo(self, af.rect().topLeft())
+        return QRect(top_left, af.size())
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        if self._volume_overlay is not None:
-            self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
+        if self._volume_overlay is not None and self._volume_overlay.isVisible():
+            self._volume_overlay.setGeometry(self._volume_hud_geometry())
         self._apply_vertical_proportions()
         QTimer.singleShot(0, self._reflow_album_size)
 
@@ -1343,7 +1385,8 @@ class MainWindow(QMainWindow):
         if isinstance(eff, QGraphicsOpacityEffect):
             eff.setOpacity(1.0)
         self._volume_overlay.set_level(val, max_v)
-        self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
+        self._volume_overlay.setGeometry(self._volume_hud_geometry())
+        self._volume_overlay.refit_to_bounds()
         self._volume_overlay.show()
         self._volume_overlay.raise_()
         self._hud_hide_timer.start()
