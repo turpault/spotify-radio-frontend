@@ -52,10 +52,12 @@ class AlbumArtLabel(QLabel):
         self._active_reply: Optional[QNetworkReply] = None
 
     def set_art_url(self, url: Optional[str]) -> None:
-        if self._active_reply is not None:
-            self._active_reply.abort()
-            self._active_reply.deleteLater()
-            self._active_reply = None
+        # Clear ref before abort(): abort() may synchronously emit finished and clear
+        # _active_reply in _on_art_finished, which would make the next deleteLater crash.
+        old = self._active_reply
+        self._active_reply = None
+        if old is not None:
+            old.abort()  # finished disposes the reply; do not deleteLater here
         if not url:
             self.clear()
             self.setText("—")
@@ -70,17 +72,19 @@ class AlbumArtLabel(QLabel):
         reply = self.sender()
         if not isinstance(reply, QNetworkReply):
             return
+        if reply is not self._active_reply:
+            # Superseded or cleared before a new request; do not clobber the current image
+            reply.deleteLater()
+            return
         if reply.error() != QNetworkReply.NetworkError.NoError:
             reply.deleteLater()
-            if reply is self._active_reply:
-                self._active_reply = None
+            self._active_reply = None
             self.clear()
             self.setText("—")
             return
         data = reply.readAll()
         reply.deleteLater()
-        if reply is self._active_reply:
-            self._active_reply = None
+        self._active_reply = None
         pix = QPixmap()
         if not pix.loadFromData(bytes(data)):
             self.clear()
