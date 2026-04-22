@@ -482,6 +482,11 @@ class MainWindow(QMainWindow):
             QPushButton:hover {{ background-color: #4a3c30; border-color: #c9a43a; color: #fffaf0; }}
             QPushButton:pressed {{ background-color: #241a10; border-color: #6a5a40; color: #e8dcc4; }}
             QPushButton:disabled {{ color: #6a5a50; background-color: #2a2018; border-color: #4a4034; }}
+            QPushButton#VolumeStepBtn {{
+                font-size: {b(15)}px;
+                font-weight: 600;
+                padding: {b(6)}px {b(4)}px;
+            }}
             QPushButton#IconTransport {{
                 min-width: {b(70)}px; min-height: {b(70)}px; max-height: {b(80)}px; padding: {b(8)}px;
                 background-color: #1e1810;
@@ -576,30 +581,24 @@ class MainWindow(QMainWindow):
         right_nav.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         right_nav.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        self.volume_down = QPushButton("−")
-        self.volume_up = QPushButton("+")
-        for b in (self.volume_down, self.volume_up):
-            b.setFixedSize(_btn(72), _btn(72))
-        self.volume_down.clicked.connect(self._on_volume_down)
+        # Increase first, then decrease (was the reverse with +/− only).
+        self.volume_up = QPushButton("Volume\nup")
+        self.volume_up.setObjectName("VolumeStepBtn")
+        self.volume_up.setToolTip("Increase volume")
+        self.volume_down = QPushButton("Volume\ndown")
+        self.volume_down.setObjectName("VolumeStepBtn")
+        self.volume_down.setToolTip("Decrease volume")
+        for b in (self.volume_up, self.volume_down):
+            b.setFixedSize(_btn(78), _btn(90))
         self.volume_up.clicked.connect(self._on_volume_up)
-        self.vol_meta = QLabel("")
-        self.vol_meta.setStyleSheet(
-            f"color: #7a6a58; font-size: {_s(15)}px; font-family: Palatino, Georgia, serif;"
-        )
+        self.volume_down.clicked.connect(self._on_volume_down)
         self.vol_rail = QWidget()
-        self.vol_rail.setFixedWidth(_btn(100))
+        self.vol_rail.setFixedWidth(_btn(110))
         vol_col = QVBoxLayout(self.vol_rail)
         vol_col.setContentsMargins(0, 0, 0, 0)
         vol_col.setSpacing(_btn(10))
-        vol_lbl = QLabel("Volume")
-        vol_lbl.setStyleSheet(
-            f"color: #9a8a70; font-size: {_s(16)}px; font-weight: 600; "
-            "font-family: Palatino, Georgia, serif;"
-        )
-        vol_col.addWidget(vol_lbl, 0, Qt.AlignmentFlag.AlignLeft)
-        vol_col.addWidget(self.vol_meta, 0, Qt.AlignmentFlag.AlignLeft)
-        vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addWidget(self.volume_up, 0, Qt.AlignmentFlag.AlignLeft)
+        vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addStretch(1)
 
         art_row = QHBoxLayout()
@@ -1121,7 +1120,6 @@ class MainWindow(QMainWindow):
         self._vol_value = val
         self.volume_down.setEnabled(val > 0)
         self.volume_up.setEnabled(val < self._vol_max)
-        self.vol_meta.setText(f"{val} / {self._vol_max}")
         should_flash = force_hud or (
             self._last_hud_val is not None and val != self._last_hud_val
         )
