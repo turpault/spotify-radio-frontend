@@ -5,11 +5,9 @@ PyQt6 touchscreen UI for a local go-librespot daemon: REST + WebSocket (/events)
 Expects the API on http://127.0.0.1:3678 by default. Override with GOLIBRESPOT_BASE.
 
 Layout: built-in v2 in ``ui_layout_v2_document.UI_LAYOUT_V2_DOCUMENT``; override via
-``JUKEBOX_UI_LAYOUT`` JSON. ``w,h`` = size (one null ⇒ square, side from the other %); ``x,y`` =
-position (``null`` = center; < 0 = from right/bottom).
-
-Daemon / error / buffering status is a full-window dim overlay (``SubStatusModal``), above the main
-UI and under the volume HUD. Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
+``JUKEBOX_UI_LAYOUT`` JSON. ``elements`` and ``overlays`` use the same ``w,h`` / ``x,y`` rules
+(percent of the **central** widget; one null on w|h → square). Overlays: ``sub_status_modal`` and
+``volume_hud`` (higher ``z`` above lower ``z``). Daemon / error / buffering use ``SubStatusModal``. Eight side tiles (four per side) show the last **eight distinct playlist (context) URIs**; metadata and art
 are saved under the data directory (``JUKEBOX_GLS_DATA_DIR`` or
 ``~/.config/jukebox-frontend-go-librespot/``). Tap a tile to start that URI via the local player
 API (no Spotify Web / Connect REST client).
@@ -28,8 +26,8 @@ from typing import Any, Optional
 
 from PyQt6.QtCore import (
     QAbstractAnimation,
+    QPoint,
     QPropertyAnimation,
-    QRect,
     QSize,
     Qt,
     QTimer,
@@ -771,8 +769,10 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        self._ui_elements = load_ui_layout()
-        # Percent-based rects (0–1) of the central widget; see ui_layout_v2_document.
+        _ui_layout = load_ui_layout()
+        self._ui_elements: dict[str, Any] = _ui_layout["elements"]
+        self._overlay_layout: dict[str, Any] = _ui_layout["overlays"]
+        # Element rects: 0–1 fracs of the central widget; see ui_layout_v2_document.
         self._ui_rect_map: dict[str, QWidget] = {}
 
         _meta_align = (
@@ -992,11 +992,8 @@ class MainWindow(QMainWindow):
         if not (self.sub_label.text() or "").strip():
             self._sub_status_modal.hide()
             return
-        self._sub_status_modal.setGeometry(0, 0, self.width(), self.height())
         self._sub_status_modal.show()
-        self._sub_status_modal.raise_()
-        if self._volume_overlay is not None and self._volume_overlay.isVisible():
-            self._volume_overlay.raise_()
+        self._place_overlay_widgets()
 
     def _apply_ui_layout(self) -> None:
         """Size/position from self._ui_elements (fractions of central widget); z = stack order."""
@@ -1023,10 +1020,35 @@ class MainWindow(QMainWindow):
         for _key, w in stack:
             if w is not None:
                 w.raise_()
-        if self._sub_status_modal is not None and self._sub_status_modal.isVisible():
-            self._sub_status_modal.raise_()
-        if self._volume_overlay is not None:
-            self._volume_overlay.raise_()
+        self._place_overlay_widgets()
+
+    def _place_overlay_widgets(self) -> None:
+        """Map overlay rects (central-fracs) to window geometry; respect overlay ``z`` (higher = on top)."""
+        cw = self.centralWidget()
+        if cw is None or not self._overlay_layout:
+            return
+        W, H = max(1, cw.width()), max(1, cw.height())
+        order: list[tuple[tuple[int, str], QWidget]] = []
+        for key, wgt in (
+            ("sub_status_modal", self._sub_status_modal),
+            ("volume_hud", self._volume_overlay),
+        ):
+            if wgt is None:
+                continue
+            r = self._overlay_layout.get(key)
+            if r is None:
+                continue
+            x_px, y_px, ww, hh = self._layout_rect_from_fracs(r, W, H)
+            tl = cw.mapTo(self, QPoint(x_px, y_px))
+            wgt.setGeometry(tl.x(), tl.y(), ww, hh)
+            try:
+                z = int(r.get("z", 0))
+            except (TypeError, ValueError):
+                z = 0
+            order.append(((z, key), wgt))
+        order.sort(key=lambda t: t[0])
+        for _k, wgt in order:
+            wgt.raise_()
 
     @pyqtSlot()
     def _apply_history_tiles(self) -> None:
@@ -1051,24 +1073,8 @@ class MainWindow(QMainWindow):
             if qk is not None:
                 QShortcut(QKeySequence(qk), self, activated=fn)
 
-    def _volume_hud_geometry(self) -> QRect:
-        """Size/position the volume HUD to match the album frame (QMainWindow coords)."""
-        af = getattr(self, "_art_frame", None)
-        if (
-            af is None
-            or af.width() < 2
-            or af.height() < 2
-        ):
-            return QRect(0, 0, max(1, self.width()), max(1, self.height()))
-        top_left = af.mapTo(self, af.rect().topLeft())
-        return QRect(top_left, af.size())
-
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        if self._sub_status_modal is not None:
-            self._sub_status_modal.setGeometry(0, 0, self.width(), self.height())
-        if self._volume_overlay is not None and self._volume_overlay.isVisible():
-            self._volume_overlay.setGeometry(self._volume_hud_geometry())
         QTimer.singleShot(0, self._apply_ui_layout)
 
     def _layout_reflow(self) -> None:
@@ -1346,10 +1352,9 @@ class MainWindow(QMainWindow):
         if isinstance(eff, QGraphicsOpacityEffect):
             eff.setOpacity(1.0)
         self._volume_overlay.set_level(val, max_v)
-        self._volume_overlay.setGeometry(self._volume_hud_geometry())
-        self._volume_overlay.refit_to_bounds()
         self._volume_overlay.show()
-        self._volume_overlay.raise_()
+        self._place_overlay_widgets()
+        self._volume_overlay.refit_to_bounds()
         self._hud_hide_timer.start()
 
     def _begin_hud_fade(self) -> None:

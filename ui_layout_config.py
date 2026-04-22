@@ -4,7 +4,9 @@ Load UI layout for MainWindow. The built-in v2 document is
 ``JUKEBOX_UI_LAYOUT``. On disk, v2 ``w,h`` are **whole percent
 0–100** of width/height (or **null**; see below). **null** on ``w`` or ``h`` (not both): a
 **square**; side = the non-null value on its axis. **null** on ``x``/``y`` = center; negative
-``x``/``y`` = inset from the right/bottom. In memory, fractions/``None``; v1: 0–1 floats.
+``x``/``y`` = inset from the right/bottom. In memory, fractions/``None``; v1: 0–1 floats. The
+``overlays`` map uses the same rect rules; keys ``sub_status_modal`` and ``volume_hud`` place the
+status dim layer and the volume flash HUD.
 """
 from __future__ import annotations
 
@@ -263,6 +265,31 @@ def default_ui_elements() -> dict[str, dict[str, Any]]:
     return out
 
 
+def default_overlays() -> dict[str, dict[str, Any]]:
+    """
+    Overlay rects in the same 0-1 **fractions of the central widget** as ``elements``:
+    full-window (or any rect) for status text; volume HUD defaults to the artwork region.
+    """
+    de = default_ui_elements()
+    art = de["artwork"]
+    return {
+        "sub_status_modal": {
+            "x": 0.0,
+            "y": 0.0,
+            "w": 1.0,
+            "h": 1.0,
+            "z": 0,
+        },
+        "volume_hud": {
+            "x": art["x"],
+            "y": art["y"],
+            "w": art["w"],
+            "h": art["h"],
+            "z": 1,
+        },
+    }
+
+
 REQUIRED_ELEMENT_KEYS: tuple[str, ...] = (
     *(f"playlist_{i}" for i in range(8)),
     "volume_up",
@@ -281,6 +308,8 @@ REQUIRED_ELEMENT_KEYS: tuple[str, ...] = (
 )
 
 OPTIONAL_ELEMENT_KEYS: tuple[str, ...] = ("sub_label",)
+
+REQUIRED_OVERLAY_KEYS: tuple[str, ...] = ("sub_status_modal", "volume_hud")
 
 
 def _rect_ok_v1_fracs(r: dict[str, Any]) -> bool:
@@ -389,6 +418,59 @@ def merge_ui_elements(
     return out
 
 
+def merge_ui_overlays(
+    data: Any, defaults: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    out = deepcopy(defaults)
+    if not isinstance(data, dict):
+        return out
+    version = 1
+    try:
+        vraw = data.get("version", 1)
+        version = int(vraw) if vraw is not None else 1
+    except (TypeError, ValueError):
+        version = 1
+    if version < 1:
+        version = 1
+    raw = data.get("overlays")
+    if not isinstance(raw, dict):
+        return out
+    is_v2 = version >= 2
+    for k, v in raw.items():
+        if k not in out or not isinstance(v, dict):
+            continue
+        valid = _rect_ok_v2_percent(v) if is_v2 else _rect_ok_v1_fracs(v)
+        if not valid:
+            _log.warning("ui layout: skip invalid overlay for %r", k)
+            continue
+        z_prev = int(out[k].get("z", 0))
+        try:
+            z_merged = int(v["z"])
+        except (KeyError, TypeError, ValueError):
+            z_merged = z_prev
+        if is_v2:
+            out[k] = {
+                "x": None
+                if v["x"] is None
+                else float(v["x"]) / 100.0,
+                "y": None
+                if v["y"] is None
+                else float(v["y"]) / 100.0,
+                "w": None if v.get("w") is None else float(v["w"]) / 100.0,
+                "h": None if v.get("h") is None else float(v["h"]) / 100.0,
+                "z": z_merged,
+            }
+        else:
+            out[k] = {
+                "x": None if v["x"] is None else float(v["x"]),
+                "y": None if v["y"] is None else float(v["y"]),
+                "w": None if v.get("w") is None else float(v["w"]),
+                "h": None if v.get("h") is None else float(v["h"]),
+                "z": z_merged,
+            }
+    return out
+
+
 LAYOUT_PATH_ENV = "JUKEBOX_UI_LAYOUT"
 
 
@@ -396,12 +478,21 @@ def default_json_document() -> dict[str, Any]:
     for k in REQUIRED_ELEMENT_KEYS:
         if k not in UI_LAYOUT_V2_DOCUMENT["elements"]:
             _log.error("UI_LAYOUT_V2_DOCUMENT missing %s", k)
+    odoc = UI_LAYOUT_V2_DOCUMENT.get("overlays")
+    if not isinstance(odoc, dict):
+        _log.error("UI_LAYOUT_V2_DOCUMENT missing overlays")
+    else:
+        for k in REQUIRED_OVERLAY_KEYS:
+            if k not in odoc:
+                _log.error("UI_LAYOUT_V2_DOCUMENT overlays missing %s", k)
     return deepcopy(UI_LAYOUT_V2_DOCUMENT)
 
 
-def load_ui_layout() -> dict[str, dict[str, Any]]:
-    """Merge ``UI_LAYOUT_V2_DOCUMENT`` (or override JSON) onto ``default_ui_elements()`` fracs."""
+def load_ui_layout() -> dict[str, Any]:
+    """Return ``elements`` and ``overlays`` (0-1 fracs in memory), merged from the built-in or file."""
     defaults = default_ui_elements()
+    odef = default_overlays()
+    doc_builtin = deepcopy(UI_LAYOUT_V2_DOCUMENT)
     env = (os.environ.get(LAYOUT_PATH_ENV) or "").strip()
     if env:
         p = Path(env).expanduser()
@@ -412,5 +503,11 @@ def load_ui_layout() -> dict[str, dict[str, Any]]:
             except (OSError, json.JSONDecodeError) as e:
                 _log.warning("ui layout: cannot read %s (%s); using built-in", p, e)
             else:
-                return merge_ui_elements(doc, defaults)
-    return merge_ui_elements(deepcopy(UI_LAYOUT_V2_DOCUMENT), defaults)
+                return {
+                    "elements": merge_ui_elements(doc, defaults),
+                    "overlays": merge_ui_overlays(doc, odef),
+                }
+    return {
+        "elements": merge_ui_elements(doc_builtin, defaults),
+        "overlays": merge_ui_overlays(doc_builtin, odef),
+    }
