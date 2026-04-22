@@ -637,6 +637,9 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Expanding,
         )
         self._art_over = QWidget()
+        # Let the cover show through the empty area above the bar (overlay is the top z-order child).
+        self._art_over.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._art_over.setAutoFillBackground(False)
         ovl = QVBoxLayout(self._art_over)
         ovl.setContentsMargins(0, 0, 0, 0)
         ovl.setSpacing(0)
@@ -645,10 +648,13 @@ class MainWindow(QMainWindow):
 
         self._art_host = QWidget()
         _sl = QStackedLayout(self._art_host)
+        # StackAll: all children visible, but the *current* widget is raised (see QStackedLayout docs).
+        # We need the transport overlay on top; the first add becomes current by default, which hid the bar.
         _sl.setStackingMode(QStackedLayout.StackingMode.StackAll)
         _sl.setContentsMargins(0, 0, 0, 0)
         _sl.addWidget(self.album_art)
         _sl.addWidget(self._art_over)
+        _sl.setCurrentWidget(self._art_over)
 
         art_row = QHBoxLayout()
         art_row.setSpacing(0)
