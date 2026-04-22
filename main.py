@@ -348,6 +348,19 @@ class MainWindow(QMainWindow):
         prog.addWidget(self.duration_label)
         root.addLayout(prog)
 
+        seek = QHBoxLayout()
+        self.seek_back_30 = QPushButton("−30s")
+        self.seek_fwd_30 = QPushButton("+30s")
+        for b in (self.seek_back_30, self.seek_fwd_30):
+            b.setMinimumSize(120, 56)
+        self.seek_back_30.clicked.connect(self._on_seek_back_30)
+        self.seek_fwd_30.clicked.connect(self._on_seek_fwd_30)
+        seek.addStretch(1)
+        seek.addWidget(self.seek_back_30)
+        seek.addWidget(self.seek_fwd_30)
+        seek.addStretch(1)
+        root.addLayout(seek)
+
         toggles = QHBoxLayout()
         self.shuffle_check = QCheckBox("Shuffle")
         self.repeat_track_check = QCheckBox("Repeat track")
@@ -619,6 +632,12 @@ class MainWindow(QMainWindow):
 
     def _on_prev(self) -> None:
         self._post_bg("/player/prev", {})
+
+    def _on_seek_back_30(self) -> None:
+        self._post_bg("/player/seek", {"position": -30_000, "relative": True})
+
+    def _on_seek_fwd_30(self) -> None:
+        self._post_bg("/player/seek", {"position": 30_000, "relative": True})
 
     def _vol_step(self) -> int:
         return max(1, self._vol_max // 16)
