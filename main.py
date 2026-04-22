@@ -72,7 +72,7 @@ UI_DISPLAY_SCALE = 3.0
 
 # Cover: multiply min(width, height) fit. ih/metadata fix is the main size win.
 ART_SIZE_MULT = 1.6128  # 1.344 × 1.2 (another 20% larger central artwork)
-# Hard cap in window pixels (must match AlbumArtLabel.set_square_size max).
+# Hard cap in window pixels (must match AlbumArtLabel.set_art_viewport max side).
 ART_SIDE_MAX = 2400
 
 
@@ -102,11 +102,12 @@ class AlbumArtLabel(QLabel):
 
     clicked = pyqtSignal()
 
-    def __init__(self, size: int = 280) -> None:
+    def __init__(self, w: int = 400, h: int = 400) -> None:
         super().__init__()
-        self._art_size = size
+        self._art_w = w
+        self._art_h = h
         self._raw_pix: Optional[QPixmap] = None
-        self.setFixedSize(size, size)
+        self.setFixedSize(w, h)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(_STYLE_ALBUM_PLACEHOLDER)
         self.setText("—")
@@ -139,7 +140,8 @@ class AlbumArtLabel(QLabel):
 
     def _layout_pause_overlay(self) -> None:
         self._pause_overlay.setGeometry(0, 0, self.width(), self.height())
-        ps = max(14, int(self._art_size * 0.24))
+        d = int(min(self._art_w, self._art_h))
+        ps = max(14, int(d * 0.24))
         f = self._pause_overlay.font()
         f.setPointSize(ps)
         f.setBold(True)
@@ -204,52 +206,27 @@ class AlbumArtLabel(QLabel):
         if self._raw_pix is None or self._raw_pix.isNull():
             return
         scaled = self._raw_pix.scaled(
-            self._art_size,
-            self._art_size,
+            self._art_w,
+            self._art_h,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         self.setPixmap(scaled)
 
-    def set_square_size(self, side: int) -> None:
-        # Window-pixel bounds for cover (layout chrome already scales via UI_DISPLAY_SCALE)
-        side = max(160, min(ART_SIDE_MAX, int(side)))
-        if side == self._art_size:
+    def set_art_viewport(self, w: int, h: int) -> None:
+        """Set fixed view port for the art (contain). Window-pixel bounds via UI scale."""
+        w = max(64, min(ART_SIDE_MAX, int(w)))
+        h = max(64, min(ART_SIDE_MAX, int(h)))
+        if w == self._art_w and h == self._art_h:
             return
-        self._art_size = side
-        self.setFixedSize(side, side)
+        self._art_w = w
+        self._art_h = h
+        self.setFixedSize(w, h)
         if self._raw_pix is not None and not self._raw_pix.isNull():
             self._redraw_from_raw()
         self._layout_pause_overlay()
         if self._pause_visible:
             self._pause_overlay.raise_()
-
-
-class ArtworkHost(QWidget):
-    """
-    Square cover with a child overlay; geometry is set manually so the cover is never
-    vertically collapsed (QStackedLayout+StackAll can size from the small overlay only).
-    """
-
-    def __init__(self, album: AlbumArtLabel, over: QWidget) -> None:
-        super().__init__()
-        self._album = album
-        self._over = over
-        album.setParent(self)
-        over.setParent(self)
-        over.raise_()
-        self.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        w, h = self.width(), self.height()
-        if w < 1 or h < 1:
-            return
-        self._album.setGeometry(0, 0, w, h)
-        self._over.setGeometry(0, 0, w, h)
-        self._over.raise_()
 
 
 class VolumeOverlay(QFrame):
@@ -494,6 +471,11 @@ class MainWindow(QMainWindow):
             f"""
             QMainWindow, QWidget {{ background-color: #241a14; color: #e8dcc4; border: none; }}
             QLabel {{ background: transparent; color: #e8dcc4; border: none; font-family: Palatino, Georgia, serif; }}
+            QWidget#artFrame {{
+                background: transparent;
+                border: 1px solid rgba(100, 88, 70, 0.4);
+                border-radius: {b(10)}px;
+            }}
             QFrame#artTransportBar {{
                 background-color: rgba(40, 32, 24, 0.35);
                 border: none;
@@ -629,6 +611,7 @@ class MainWindow(QMainWindow):
         self._art_transport_h = 2 * _transPad + _trans_h
         # Minimum width: padding + 4 equal buttons + 3 spacings (must fit in column with cover).
         self._art_transport_min_w = 2 * _transPad + 4 * _btn(72) + 3 * _s(4)
+        self._art_slot_gap = 0
 
         self.prev_btn = QPushButton("⏮")
         self.next_btn = QPushButton("⏭")
@@ -663,7 +646,7 @@ class MainWindow(QMainWindow):
         vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addStretch(1)
 
-        self.album_art = AlbumArtLabel(749)
+        self.album_art = AlbumArtLabel(500, 400)
         self.album_art.clicked.connect(self._on_playpause)
 
         self._art_transport = QFrame()
@@ -676,32 +659,27 @@ class MainWindow(QMainWindow):
         tlay.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignVCenter)
         tlay.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         tlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Pass clicks through the empty region so play/pause on the cover still works.
-        self._art_top_clear = QWidget()
-        self._art_top_clear.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
-        )
-        self._art_top_clear.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self._art_over = QWidget()
-        # Let the cover show through the empty area above the bar (overlay is the top z-order child).
-        self._art_over.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._art_over.setAutoFillBackground(False)
-        ovl = QVBoxLayout(self._art_over)
-        ovl.setContentsMargins(0, 0, 0, 0)
-        ovl.setSpacing(0)
-        ovl.addWidget(self._art_top_clear, 1)
-        ovl.addWidget(self._art_transport, 0)
 
-        self._art_host = ArtworkHost(self.album_art, self._art_over)
+        # Square W×W frame: image sits in a fixed viewport; transport strip is a fixed
+        # bottom row of the same frame (not overlay), so it does not move with aspect ratio.
+        self._art_frame = QWidget()
+        self._art_frame.setObjectName("artFrame")
+        self._art_frame.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        art_col = QVBoxLayout(self._art_frame)
+        art_col.setContentsMargins(0, 0, 0, 0)
+        art_col.setSpacing(0)
+        art_col.addWidget(self.album_art, 0, Qt.AlignmentFlag.AlignHCenter)
+        if self._art_slot_gap:
+            art_col.addSpacing(self._art_slot_gap)
+        art_col.addWidget(self._art_transport, 0, Qt.AlignmentFlag.AlignHCenter)
 
         art_row = QHBoxLayout()
         art_row.setSpacing(0)
         art_row.setContentsMargins(0, 0, 0, 0)
         art_row.addStretch(1)
-        art_row.addWidget(self._art_host, 0, Qt.AlignmentFlag.AlignHCenter)
+        art_row.addWidget(self._art_frame, 0, Qt.AlignmentFlag.AlignHCenter)
         art_row.addStretch(1)
 
         _meta_align = (
@@ -919,28 +897,26 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._volume_overlay is not None:
             self._volume_overlay.setGeometry(0, 0, self.width(), self.height())
-        self._reflow_album_size()
-        # After layout, info_block height reflects wrapped text for vertical budget.
+        # One deferred reflow: layout has the center column width, info sizeHint is stable.
         QTimer.singleShot(0, self._reflow_album_size)
 
     def _info_area_height(self, main_hero_h: int) -> int:
         """
-        Height reserved for title/artist/album row — only text + spacing, not filler stretch
-        (which made info_block report the whole column and starved the cover).
+        Height reserved for title/artist/album row. Uses sizeHint only so the art frame
+        side does not oscillate (live + hint mixed with deferred reflow caused clipping).
         """
         self.info_block.updateGeometry()
         w = int(self.info_block.width())
         if w < 8 and self.centralWidget() is not None:
             w = max(200, int(self.centralWidget().width() * 0.35))
         hint = int(self.info_block.sizeHint().height())
-        live = int(self.info_block.height())
-        raw = max(hint, live) if live > 2 else hint
+        raw = int(hint) if hint > 0 else 72
         # Do not let metadata take most of the column (stretches in old layout could do that).
         cap = int(max(120, min(main_hero_h * 0.45, 720)))
         return max(72, min(raw, cap))
 
     def _compute_album_side(self) -> int:
-        """Largest square that fits: min(available width, art row height) × ART_SIZE_MULT, capped."""
+        """Largest square W for the W×W art *frame* (art viewport + bottom transport + gap)."""
         w = max(400, self.width())
         h = max(400, self.height())
         # Match _build_ui: margins, hero gaps, side rails, playlist columns (no side nav columns)
@@ -954,7 +930,6 @@ class MainWindow(QMainWindow):
         below_main = sp + _s(36) + sp + 1 + sp
         main_hero_h = h - root_m - below_main
         info_h = self._info_area_height(main_hero_h)
-        # Transport is overlaid on the cover (no extra row height). Cell must be ≥ bar min width.
         art_max_h = main_hero_h - self._center_vgap - info_h
         art_max_h = max(100, art_max_h)
         fit = int(max(0, min(max_w, art_max_h)))
@@ -966,9 +941,14 @@ class MainWindow(QMainWindow):
         return max(120, side)
 
     def _reflow_album_size(self) -> None:
-        s = self._compute_album_side()
-        self.album_art.set_square_size(s)
-        self._art_host.setFixedSize(s, s)
+        w = self._compute_album_side()
+        bar_h = int(getattr(self, "_art_transport_h", 0) or 0)
+        gap = int(getattr(self, "_art_slot_gap", 0) or 0)
+        h_view = w - bar_h - gap
+        h_view = max(64, h_view)
+        self.album_art.set_art_viewport(w, h_view)
+        self._art_frame.setFixedSize(w, w)
+        self._art_transport.setFixedSize(w, bar_h)
 
     @pyqtSlot()
     def _on_ws_connected(self) -> None:
