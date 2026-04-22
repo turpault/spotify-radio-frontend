@@ -229,6 +229,35 @@ class AlbumArtLabel(QLabel):
             self._pause_overlay.raise_()
 
 
+class ArtworkFrameHost(QWidget):
+    """
+    Fixed W×W frame: the cover fills the square; a transparent top + transport strip
+    is stacked on top and aligned to the bottom (no QStackedLayout under-sizing).
+    """
+
+    def __init__(self, album: AlbumArtLabel, over: QWidget) -> None:
+        super().__init__()
+        self._album = album
+        self._over = over
+        album.setParent(self)
+        over.setParent(self)
+        over.raise_()
+        over.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        over.setAutoFillBackground(False)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        w, h = self.width(), self.height()
+        if w < 1 or h < 1:
+            return
+        self._album.setGeometry(0, 0, w, h)
+        self._over.setGeometry(0, 0, w, h)
+        self._over.raise_()
+
+
 class VolumeOverlay(QFrame):
     """Fullscreen dim + centered macOS-style volume HUD (large level + bar)."""
 
@@ -611,7 +640,6 @@ class MainWindow(QMainWindow):
         self._art_transport_h = 2 * _transPad + _trans_h
         # Minimum width: padding + 4 equal buttons + 3 spacings (must fit in column with cover).
         self._art_transport_min_w = 2 * _transPad + 4 * _btn(72) + 3 * _s(4)
-        self._art_slot_gap = 0
 
         self.prev_btn = QPushButton("⏮")
         self.next_btn = QPushButton("⏭")
@@ -646,7 +674,7 @@ class MainWindow(QMainWindow):
         vol_col.addWidget(self.volume_down, 0, Qt.AlignmentFlag.AlignLeft)
         vol_col.addStretch(1)
 
-        self.album_art = AlbumArtLabel(500, 400)
+        self.album_art = AlbumArtLabel(500, 500)
         self.album_art.clicked.connect(self._on_playpause)
 
         self._art_transport = QFrame()
@@ -659,21 +687,24 @@ class MainWindow(QMainWindow):
         tlay.addWidget(self.seek_fwd_30, 0, Qt.AlignmentFlag.AlignVCenter)
         tlay.addWidget(self.next_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         tlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Square W×W frame: image sits in a fixed viewport; transport strip is a fixed
-        # bottom row of the same frame (not overlay), so it does not move with aspect ratio.
-        self._art_frame = QWidget()
-        self._art_frame.setObjectName("artFrame")
-        self._art_frame.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        # Top area forwards clicks to the cover; bar sits on the bottom inside the W×W frame.
+        self._art_top_clear = QWidget()
+        self._art_top_clear.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
         )
-        art_col = QVBoxLayout(self._art_frame)
-        art_col.setContentsMargins(0, 0, 0, 0)
-        art_col.setSpacing(0)
-        art_col.addWidget(self.album_art, 0, Qt.AlignmentFlag.AlignHCenter)
-        if self._art_slot_gap:
-            art_col.addSpacing(self._art_slot_gap)
-        art_col.addWidget(self._art_transport, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._art_top_clear.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self._art_over = QWidget()
+        ovl = QVBoxLayout(self._art_over)
+        ovl.setContentsMargins(0, 0, 0, 0)
+        ovl.setSpacing(0)
+        ovl.addWidget(self._art_top_clear, 1)
+        ovl.addWidget(self._art_transport, 0)
+
+        self._art_frame = ArtworkFrameHost(self.album_art, self._art_over)
+        self._art_frame.setObjectName("artFrame")
 
         art_row = QHBoxLayout()
         art_row.setSpacing(0)
@@ -916,7 +947,7 @@ class MainWindow(QMainWindow):
         return max(72, min(raw, cap))
 
     def _compute_album_side(self) -> int:
-        """Largest square W for the W×W art *frame* (art viewport + bottom transport + gap)."""
+        """Largest square W for the W×W art frame (cover + in-frame bottom transport)."""
         w = max(400, self.width())
         h = max(400, self.height())
         # Match _build_ui: margins, hero gaps, side rails, playlist columns (no side nav columns)
@@ -943,10 +974,8 @@ class MainWindow(QMainWindow):
     def _reflow_album_size(self) -> None:
         w = self._compute_album_side()
         bar_h = int(getattr(self, "_art_transport_h", 0) or 0)
-        gap = int(getattr(self, "_art_slot_gap", 0) or 0)
-        h_view = w - bar_h - gap
-        h_view = max(64, h_view)
-        self.album_art.set_art_viewport(w, h_view)
+        # Cover uses the full square; bar is drawn in the bottom strip of the same frame.
+        self.album_art.set_art_viewport(w, w)
         self._art_frame.setFixedSize(w, w)
         self._art_transport.setFixedSize(w, bar_h)
 
