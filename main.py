@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 import threading
 import time
@@ -395,6 +396,10 @@ class MainWindow(QMainWindow):
         self._tick.setInterval(500)
         self._tick.timeout.connect(self._on_tick)
 
+        _log.info(
+            "window init: GOLIBRESPOT_BASE=%s (override with env GOLIBRESPOT_BASE)",
+            self._cfg.base,
+        )
         self._build_ui()
         self._wire_shortcuts()
         QTimer.singleShot(0, self._reflow_album_size)
@@ -900,9 +905,12 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, daemon=True, name="gls-status").start()
 
     def _request_playlists_bg(self) -> None:
+        _log.debug("playlists: background fetch scheduled")
         def work() -> None:
             try:
+                _log.debug("playlists: calling get_me_playlists(limit=6)")
                 pls = get_me_playlists(self._cfg, limit=6)
+                _log.info("playlists: got %d row(s) from API", len(pls))
             except GlsApiError as e:
                 _log.warning("playlists: %s", e)
                 QTimer.singleShot(
@@ -923,17 +931,16 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str)
     def _on_playlists_failed(self, err: str) -> None:
-        self._set_playlist_banner(
-            f"Playlists: {err[:400]}".strip()
-            if (err or "").strip()
-            else "Playlists: request failed (see log)."
-        )
+        msg = f"Playlists: {err[:400]}".strip() if (err or "").strip() else "Playlists: request failed (see log)."
+        _log.error("playlists UI: failed — %s", err)
+        self._set_playlist_banner(msg)
         for tile in self._playlist_tiles:
             tile.set_playlist(None, self._playlist_tile_icon)
 
     @pyqtSlot(object)
     def _on_playlists_ok(self, pls: object) -> None:
         self._set_playlist_banner("")
+        _log.info("playlists UI: applying result type=%s", type(pls).__name__)
         rows: list[Optional[MePlaylist]] = []
         if isinstance(pls, list):
             for x in pls:
@@ -943,10 +950,14 @@ class MainWindow(QMainWindow):
             rows.append(None)
         rows = rows[:6]
         n_ok = sum(1 for r in rows if r is not None and r.uri)
+        _log.info("playlists UI: %d tile(s) with valid uri (of 6)", n_ok)
+        for i, r in enumerate(rows):
+            if r is not None and r.uri:
+                _log.debug("  tile %d: %r", i, r.name)
         if n_ok == 0 and isinstance(pls, list) and len(pls) == 0:
-            self._set_playlist_banner(
-                "Playlists: none returned (is GET /web-api/v1/me/playlists allowed on this daemon?)"
-            )
+            msg = "Playlists: none returned (is GET /web-api/v1/me/playlists allowed on this daemon?)"
+            _log.warning("playlists UI: %s", msg)
+            self._set_playlist_banner(msg)
         for i, tile in enumerate(self._playlist_tiles):
             pl = rows[i]
             tile.set_playlist(pl, self._playlist_tile_icon)
@@ -1288,10 +1299,37 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
 
+def _configure_logging() -> None:
+    level_name = (os.environ.get("GLS_LOG_LEVEL") or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    log_file = (os.environ.get("GLS_LOG_FILE") or "").strip()
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    datefmt = "%H:%M:%S"
+    if sys.version_info >= (3, 8):
+        logging.basicConfig(
+            level=level,
+            format=fmt,
+            datefmt=datefmt,
+            stream=sys.stderr,
+            force=True,
+        )
+    else:
+        logging.basicConfig(
+            level=level, format=fmt, datefmt=datefmt, stream=sys.stderr
+        )
+    if log_file:
+        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(fmt, datefmt))
+        logging.getLogger().addHandler(fh)
+    for name in ("gls-frontend", "gls-client"):
+        logging.getLogger(name).setLevel(level)
+
+
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    _configure_logging()
+    _log.info(
+        "logging: level=%s (set GLS_LOG_LEVEL=DEBUG, optional GLS_LOG_FILE=…)",
+        (os.environ.get("GLS_LOG_LEVEL") or "INFO").upper(),
     )
     app = QApplication(sys.argv)
     app.setStyle("Fusion")

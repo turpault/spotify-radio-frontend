@@ -79,10 +79,18 @@ def get_json(path: str, cfg: Optional[GlsConfig] = None) -> Any:
     code, raw = _request("GET", url, body=None)
     if code != 200:
         text = raw.decode("utf-8", errors="replace")
+        _log.info(
+            "get_json: %s -> HTTP %d (body len=%d) %s",
+            path,
+            code,
+            len(text),
+            text[:200].replace("\n", " ") if text else "",
+        )
         raise GlsApiError(f"GET {path}: HTTP {code} {text[:500]}")
     if not raw:
         return None
     text = raw.decode("utf-8", errors="replace")
+    _log.debug("get_json: %s <- HTTP 200, %d bytes", path, len(text))
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
@@ -158,4 +166,7 @@ def get_me_playlists(
         out.append(MePlaylist(name=name_s, uri=uri))
     if not out and items:
         _log.warning("me/playlists: %d item(s) but 0 parsable; sample keys: %s", len(items), list(items[0].keys()) if items and isinstance(items[0], dict) else None)
+    _log.info("me/playlists: returning %d playlist(s) for limit=%s", len(out), limit)
+    for i, p in enumerate(out):
+        _log.debug("  [%d] name=%r uri=%s", i, p.name, p.uri[:48] + "…" if len(p.uri) > 48 else p.uri)
     return out
