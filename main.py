@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSlot
 from PyQt6.QtGui import QCloseEvent, QFont, QKeySequence, QPixmap, QShortcut
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PyQt6.QtNetwork import QAbstractSocket, QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PyQt6.QtWebSockets import QWebSocket
 from PyQt6.QtWidgets import (
     QApplication,
@@ -390,7 +390,7 @@ class MainWindow(QMainWindow):
         else:
             self.sub_label.setText("")
 
-        ws_ok = self._ws.state() == QWebSocket.State.ConnectedState
+        ws_ok = self._ws.state() == QAbstractSocket.SocketState.ConnectedState
         self.conn_label.setText(
             "Connected · WebSocket " + ("open" if ws_ok else "reconnecting…")
         )
