@@ -617,13 +617,18 @@ class MainWindow(QMainWindow):
         art_row.setContentsMargins(0, 0, 0, 0)
         # Top-align: do not V-center nav columns in the row — when the cover is resized, row
         # height changes and V-center would move prev/next vertically. Top keeps Y stable.
+        # QBoxLayout.addLayout() has no alignment arg in PyQt6; wrap in QWidget and addWidget.
         _art_top = Qt.AlignmentFlag.AlignTop
         _art_in_cell = _art_top | Qt.AlignmentFlag.AlignHCenter
-        art_row.addLayout(left_nav, 0, _art_top)
+        left_nav_w = QWidget()
+        left_nav_w.setLayout(left_nav)
+        right_nav_w = QWidget()
+        right_nav_w.setLayout(right_nav)
+        art_row.addWidget(left_nav_w, 0, _art_top)
         self.album_art = AlbumArtLabel(749)
         self.album_art.clicked.connect(self._on_playpause)
         art_row.addWidget(self.album_art, 1, _art_in_cell)
-        art_row.addLayout(right_nav, 0, _art_top)
+        art_row.addWidget(right_nav_w, 0, _art_top)
 
         _meta_align = (
             Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
