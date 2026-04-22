@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
             self._ws.errorOccurred.connect(self._on_ws_error)
 
     @pyqtSlot()
-    def _on_ws_error(self) -> None:
+    def _on_ws_error(self, *_args: object) -> None:
         _log.warning("WebSocket error (will retry)")
         self.conn_label.setText("WebSocket error — retrying…")
 
