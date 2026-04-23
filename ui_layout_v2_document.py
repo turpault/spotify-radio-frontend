@@ -26,13 +26,13 @@ UI_FONT_DOCUMENT: dict[str, Any] = {
         "sub_label": {"size": 12},
         "progress": {"family": "Share Tech Mono", "size": 15, "bold": True},
         # prev / next / seek_back_30 / seek_fwd_30 (QPushButton#ArtTransportBtn); per-button rect can override.
-        "playback_buttons": {"family": "Corben", "size": 18, "bold": True},
+        "playback_buttons": {"family": "Share Tech Mono", "size": 18, "bold": True},
         "artwork": {"size": 18},
         # Merged into each ``playlist_0``…``playlist_7`` rect (override per rect with inline ``font``).
         "playlist_tile": {"size": 11, "bold": True},
     },
     "overlays": {
-        "volume_hud": {"family": "Share Tech Mono", "size": 44, "sub_size": 14},
+        "volume_hud": {"family": "Share Tech Mono", "size": 44},
         "sub_status_modal": {},
     },
 }

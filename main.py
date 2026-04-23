@@ -469,7 +469,6 @@ class VolumeOverlay(QFrame):
         super().__init__(parent)
         self._typo_family = "Corben"
         self._typo_pct_design = 44.0
-        self._typo_sub_design = 14.0
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setObjectName("volumeOverlay")
         self._apply_hud_stylesheet()
@@ -492,9 +491,6 @@ class VolumeOverlay(QFrame):
         pf.setBold(True)
         self._pct.setFont(pf)
         self._pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sub = QLabel("")
-        self._sub.setObjectName("hudSub")
-        self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._card = QFrame()
         self._card.setObjectName("volumeHudCard")
@@ -504,7 +500,6 @@ class VolumeOverlay(QFrame):
         self._inner.addWidget(self._icon, alignment=Qt.AlignmentFlag.AlignCenter)
         self._inner.addWidget(self._pct, alignment=Qt.AlignmentFlag.AlignCenter)
         self._inner.addWidget(self._bar, alignment=Qt.AlignmentFlag.AlignCenter)
-        self._inner.addWidget(self._sub, alignment=Qt.AlignmentFlag.AlignCenter)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -522,17 +517,12 @@ class VolumeOverlay(QFrame):
         self.hide()
         for w in (self, *self.findChildren(QWidget)):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._sub.setStyleSheet(
-            f"color: rgba(200, 185, 160, 0.75); font-size: {_s(14)}px; "
-            f"font-family: {qss_font_family(self._typo_family)};"
-        )
 
     def configure_typography(
-        self, *, family: str, pct_design: float, sub_design: float
+        self, *, family: str, pct_design: float
     ) -> None:
         self._typo_family = (family or "Corben").strip() or "Corben"
         self._typo_pct_design = max(1.0, float(pct_design))
-        self._typo_sub_design = max(1.0, float(sub_design))
         self._apply_hud_stylesheet()
         pf = self._pct.font()
         pf.setFamily(self._typo_family)
@@ -568,12 +558,6 @@ class VolumeOverlay(QFrame):
         )
         pf.setBold(True)
         self._pct.setFont(pf)
-        st = max(7, int(d * 0.04 * (self._typo_sub_design / 14.0)))
-        fam_q = qss_font_family(self._typo_family)
-        self._sub.setStyleSheet(
-            f"color: rgba(200, 185, 160, 0.75); font-size: {st}px; "
-            f"font-family: {fam_q};"
-        )
 
     def set_level(self, value: int, max_v: int) -> None:
         max_v = max(1, int(max_v))
@@ -582,7 +566,6 @@ class VolumeOverlay(QFrame):
         self._bar.setRange(0, max_v)
         self._bar.setValue(value)
         self._pct.setText(f"{pct}%")
-        self._sub.setText(f"{value} / {max_v}")
 
 
 class SubStatusModal(QFrame):
@@ -1255,13 +1238,9 @@ class MainWindow(QMainWindow):
 
         self._volume_overlay = VolumeOverlay(self)
         _vh = self._overlay_layout["volume_hud"]["font"]
-        _sub_sz = _vh.get("sub_size")
-        if _sub_sz is None:
-            _sub_sz = float(_vh["size"]) * (14.0 / 44.0)
         self._volume_overlay.configure_typography(
             family=_vh["family"],
             pct_design=float(_vh["size"]),
-            sub_design=float(_sub_sz),
         )
         self._volume_overlay.hide()
         self._apply_ui_layout()
