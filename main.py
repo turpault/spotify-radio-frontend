@@ -1622,8 +1622,8 @@ class MainWindow(QMainWindow):
                 self._playing_context_uri = tctx
             elif sctx:
                 self._playing_context_uri = sctx
-            else:
-                self._playing_context_uri = ""
+            # else: keep _playing_context_uri — /status often omits context_uri while a track is present;
+            # WebSocket or a prior poll may have set it; do not clear here or the border flashes off.
             self._apply_track(tr)
         else:
             self._clear_track()
