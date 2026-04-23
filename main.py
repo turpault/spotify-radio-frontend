@@ -167,6 +167,8 @@ class AlbumArtLabel(QLabel):
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._nam = QNetworkAccessManager(self)
         self._active_reply: Optional[QNetworkReply] = None
+        # Set after a successful load; used to avoid re-fetching the same cover on every status poll.
+        self._loaded_art_url: Optional[str] = None
         # Cover pixmap on a child so we can fade it in without dimming the pause overlay.
         self._pix_label = QLabel(self)
         self._pix_label.setAttribute(
@@ -245,20 +247,29 @@ class AlbumArtLabel(QLabel):
         super().mousePressEvent(event)
 
     def set_art_url(self, url: Optional[str]) -> None:
+        u = (url or "").strip() or None
+        if (
+            u is not None
+            and u == self._loaded_art_url
+            and self._raw_pix is not None
+            and not self._raw_pix.isNull()
+        ):
+            return
         # Clear ref before abort(): abort() may synchronously emit finished and clear
         # _active_reply in _on_art_finished, which would make the next deleteLater crash.
         old = self._active_reply
         self._active_reply = None
         if old is not None:
             old.abort()  # finished disposes the reply; do not deleteLater here
-        if not url:
+        if not u:
+            self._loaded_art_url = None
             self._raw_pix = None
             self._reset_art_layer_for_placeholder()
             self.clear()
             self.setText("—")
             return
         self.setText("")
-        req = QNetworkRequest(QUrl(url))
+        req = QNetworkRequest(QUrl(u))
         req.setRawHeader(b"User-Agent", b"JukeboxGoLibrespot/1.0")
         self._active_reply = self._nam.get(req)
         self._active_reply.finished.connect(self._on_art_finished)
@@ -274,6 +285,7 @@ class AlbumArtLabel(QLabel):
         if reply.error() != QNetworkReply.NetworkError.NoError:
             reply.deleteLater()
             self._active_reply = None
+            self._loaded_art_url = None
             self._raw_pix = None
             self._reset_art_layer_for_placeholder()
             self.clear()
@@ -284,11 +296,15 @@ class AlbumArtLabel(QLabel):
         self._active_reply = None
         pix = QPixmap()
         if not pix.loadFromData(bytes(data)):
+            self._loaded_art_url = None
             self._raw_pix = None
             self._reset_art_layer_for_placeholder()
             self.clear()
             self.setText("—")
             return
+        loaded = (reply.request().url().toString() or "").strip() or None
+        if loaded is not None:
+            self._loaded_art_url = loaded
         self._raw_pix = pix
         self._redraw_from_raw(fade_in=True)
 
