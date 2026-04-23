@@ -41,12 +41,14 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QCloseEvent,
+    QColor,
     QCursor,
     QFont,
     QFontMetrics,
     QIcon,
     QKeySequence,
     QMouseEvent,
+    QPainter,
     QPainterPath,
     QPixmap,
     QRegion,
@@ -147,6 +149,33 @@ def _center_cover_pixmap(
     x0 = (sw - tw) // 2
     y0 = (sh - th) // 2
     return scaled.copy(x0, y0, tw, th)
+
+
+def _playlist_tile_framed_pixmap(source: QPixmap, w: int, h: int) -> QPixmap:
+    """
+    Inset, round-clip, and alpha-composite cover to match ``QToolButton#PlaylistTile`` QSS
+    (``border: _btn(2)``, ``border-radius: _btn(10)``) so square artwork does not spill past the frame.
+    """
+    if w < 2 or h < 2 or source.isNull():
+        return source
+    border = _btn(2)
+    outer_r = _btn(10)
+    inner_r = max(0, outer_r - border)
+    b = border
+    iw = max(1, w - 2 * b)
+    ih = max(1, h - 2 * b)
+    scaled = _center_cover_pixmap(source, iw, ih)
+    out = QPixmap(w, h)
+    out.fill(QColor(0, 0, 0, 0))
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    r = min(float(inner_r), iw / 2.0, ih / 2.0)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(b, b, iw, ih), r, r)
+    p.setClipPath(path)
+    p.drawPixmap(b, b, scaled)
+    p.end()
+    return out
 
 
 # Vintage radio: warm walnut shell, cream dial text, brass accents (bakelite-style keys).
@@ -736,8 +765,8 @@ class _PlaylistArtHost(QWidget):
         if aw < 2 or ah < 2:
             return
         if self._raw_cover is not None and not self._raw_cover.isNull():
-            filled = _center_cover_pixmap(self._raw_cover, aw, ah)
-            self._btn.setIcon(QIcon(filled))
+            framed = _playlist_tile_framed_pixmap(self._raw_cover, aw, ah)
+            self._btn.setIcon(QIcon(framed))
             self._btn.setIconSize(QSize(aw, ah))
             return
         pm = self._fallback_icon.pixmap(
@@ -746,8 +775,8 @@ class _PlaylistArtHost(QWidget):
             QIcon.State.Off,
         )
         if pm is not None and not pm.isNull():
-            p2 = _center_cover_pixmap(pm, aw, ah)
-            self._btn.setIcon(QIcon(p2))
+            framed = _playlist_tile_framed_pixmap(pm, aw, ah)
+            self._btn.setIcon(QIcon(framed))
             self._btn.setIconSize(QSize(aw, ah))
 
 
