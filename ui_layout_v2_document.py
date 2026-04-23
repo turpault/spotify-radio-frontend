@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-playback_button_y=60
-playback_button_x=33
+playback_button_y=54
+playback_button_x=18
 playback_button_seek_offset_x=8.5
+playback_button_seek_offset_y=11
 align_top = 3
 playlist_x = 1.5
 playlist_width = 13
@@ -24,6 +25,8 @@ UI_FONT_DOCUMENT: dict[str, Any] = {
         # Applies to the status / error line (same QLabel as overlay sub_status_modal).
         "sub_label": {"size": 12},
         "progress": {"family": "Share Tech Mono", "size": 15, "bold": True},
+        # prev / next / seek_back_30 / seek_fwd_30 (QPushButton#ArtTransportBtn); per-button rect can override.
+        "playback_buttons": {"family": "Corben", "size": 18, "bold": True},
         "artwork": {"size": 18},
         # Merged into each ``playlist_0``…``playlist_7`` rect (override per rect with inline ``font``).
         "playlist_tile": {"size": 11, "bold": True},
@@ -42,15 +45,17 @@ UI_LAYOUT_V2_DOCUMENT: dict[str, Any] = {
         "overlays sub_status_modal (dim status text) and volume_hud (volume flash) are rects in the same "
         "percent space as elements (central widget). Higher overlay z is drawn on top. All keys x,y,w,h,z required per rect. "
         "Optional top-level \"font\": { \"default\": { \"family\", \"size\", optional \"bold\" }, "
-        "\"elements\" / \"overlays\": { \"<name>\": partial font } }. Each rect may include optional "
+        "\"elements\" / \"overlays\": { \"<name>\": partial font } } — e.g. "
+        "``playback_buttons`` applies to ``prev`` / ``next`` / ``seek_back_30`` / ``seek_fwd_30``. "
+        "Each rect may include optional "
         "\"font\" to override. Sizes are design-time units scaled like other UI px (see main UI_DISPLAY_SCALE)."
     ),
     "font": {},
     "elements": {
         "artwork": {"x": None, "y": align_top, "w": None, "h": 72, "z": 0},
         "prev": {"x": playback_button_x, "y": playback_button_y, "w": 8, "h": 10, "z": 40},
-        "seek_back_30": {"x": playback_button_x+playback_button_seek_offset_x, "y": playback_button_y, "w": 8, "h": 10, "z": 40},
-        "seek_fwd_30": {"x": -playback_button_x-playback_button_seek_offset_x, "y": playback_button_y, "w": 8, "h": 10, "z": 40},
+        "seek_back_30": {"x": playback_button_x, "y": playback_button_y+playback_button_seek_offset_y, "w": 8, "h": 10, "z": 40},
+        "seek_fwd_30": {"x": -playback_button_x, "y": playback_button_y+playback_button_seek_offset_y, "w": 8, "h": 10, "z": 40},
         "next": {"x": -playback_button_x, "y": playback_button_y, "w": 8, "h": 10, "z": 40},
         "volume_up": {"x": volume_x, "y": align_top, "w": 8, "h": 10, "z": 20},
         "volume_down": {"x": volume_x, "y": align_top+volume_offset_y, "w": 8, "h": 10, "z": 20},

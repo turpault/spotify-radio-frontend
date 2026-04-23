@@ -403,6 +403,11 @@ def _attach_inline_font(out: dict[str, Any], k: str, v: Any) -> None:
         _log.warning("ui layout: skip invalid font for %r", k)
 
 
+_PLAYBACK_TRANSPORT_KEYS: frozenset[str] = frozenset(
+    ("prev", "next", "seek_back_30", "seek_fwd_30")
+)
+
+
 def resolve_font_for_key(
     key: str,
     rect: Optional[dict[str, Any]],
@@ -416,6 +421,10 @@ def resolve_font_for_key(
         pto = bucket.get("playlist_tile")
         if isinstance(pto, dict):
             spec = _merge_font_spec(spec, pto)
+    if not overlay and key in _PLAYBACK_TRANSPORT_KEYS:
+        pbs = bucket.get("playback_buttons")
+        if isinstance(pbs, dict):
+            spec = _merge_font_spec(spec, pbs)
     if overlay and key == "sub_status_modal":
         el_b = merged_doc.get("elements")
         if isinstance(el_b, dict) and "sub_label" in el_b:

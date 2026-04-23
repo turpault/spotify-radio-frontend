@@ -967,8 +967,6 @@ class MainWindow(QMainWindow):
                 color: #f5ecd8;
                 border: {b(2)}px solid rgba(220, 200, 170, 0.42);
                 border-radius: {b(10)}px;
-                font-size: {b(18)}px;
-                font-weight: bold;
                 padding: {b(2)}px {b(4)}px;
             }}
             QPushButton#ArtTransportBtn:hover:enabled {{
@@ -1093,6 +1091,19 @@ class MainWindow(QMainWindow):
         self.seek_fwd_30 = QPushButton("+30s", parent=central)
         for b in (self.prev_btn, self.next_btn, self.seek_back_30, self.seek_fwd_30):
             b.setObjectName("ArtTransportBtn")
+        for _name, _w in (
+            ("prev", self.prev_btn),
+            ("next", self.next_btn),
+            ("seek_back_30", self.seek_back_30),
+            ("seek_fwd_30", self.seek_fwd_30),
+        ):
+            _fs = self._ui_elements[_name]["font"]
+            _pf = QFont()
+            _pf.setFamily(_fs["family"])
+            _pf.setPointSize(_s(int(float(_fs.get("size", 18)))))
+            _bld = _fs.get("bold")
+            _pf.setBold(_bld if isinstance(_bld, bool) else True)
+            _w.setFont(_pf)
         self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30.clicked.connect(self._on_seek_back_30)
