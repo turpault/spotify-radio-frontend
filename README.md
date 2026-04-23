@@ -38,7 +38,6 @@ Load variables from a `.env` in the project root (via `python-dotenv`) or export
 | `JUKEBOX_UI_LAYOUT` | Path to JSON overriding the built-in v2 layout (`ui_layout_v2_document.py`) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Client-credentials tokens for public catalog / some API paths |
 | `SPOTIFY_ACCESS_TOKEN` or token file | User OAuth; see `spotify_web_api.py` and `SPOTIFY_TOKEN_PATH` |
-| `GOLIBRESPOT_FORCE_LIBRESPOT_PLAYLISTS` | Force playlist loading via the daemon’s `/web-api/` path (see code) |
 | `GLS_LOG_LEVEL` / `GLS_LOG_FILE` | App logging |
 
 Do not commit `.env`, tokens, or `credentials.json` (see `.gitignore`).

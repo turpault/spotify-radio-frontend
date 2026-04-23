@@ -30,7 +30,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from gls_client import GlsConfig, _log_http_error_response, get_json
+from gls_client import GlsConfig, _log_http_error_response
 
 _log = logging.getLogger("gls-client")
 
@@ -79,78 +79,36 @@ def parse_me_playlist_items(items: list[Any]) -> list[MePlaylist]:
     return out
 
 
-def get_me_playlists_gls_proxy(
-    cfg: Optional[GlsConfig] = None, *, limit: int = 6, offset: int = 0
-) -> list[MePlaylist]:
-    """
-    Playlists via go-librespot ``/web-api/v1/...`` (session proxy, not a public API contract).
-    """
-    c = cfg or GlsConfig.from_env()
-    path = f"/web-api/v1/me/playlists?limit={int(limit)}&offset={int(offset)}"
-    data = get_json(path, cfg=c)
-    if data is None:
-        _log.warning("me/playlists: empty body (proxy)")
-        return []
-    if isinstance(data, list):
-        items: Any = data
-    elif isinstance(data, dict):
-        items = data.get("items")
-    else:
-        _log.warning("me/playlists: unexpected top-level type %s", type(data))
-        return []
-    if not isinstance(items, list):
-        _log.warning(
-            "me/playlists: items not a list, keys=%s",
-            list(data.keys()) if isinstance(data, dict) else None,
-        )
-        return []
-    out = parse_me_playlist_items(items)
-    _log.info("me/playlists (proxy): returning %d playlist(s) for limit=%s", len(out), limit)
-    return out
-
-
 _playlist_oauth_missing_logged: bool = False
 
 
-def _log_spotify_oauth_missing_once(cfg: Optional[GlsConfig]) -> None:
+def _log_spotify_oauth_missing_once() -> None:
     global _playlist_oauth_missing_logged
     if _playlist_oauth_missing_logged:
         return
     _playlist_oauth_missing_logged = True
-    base = (cfg or GlsConfig.from_env()).base
     _log.warning(
         "me/playlists: NOT calling https://api.spotify.com (no OAuth). "
-        "Set env SPOTIFY_ACCESS_TOKEN, or add a token file (see %s). "
-        "Using go-librespot HTTP proxy at %s/web-api/… instead.",
+        "Set env SPOTIFY_ACCESS_TOKEN, or add a token file (see %s).",
         default_token_path(),
-        base,
     )
 
 
 def get_me_playlists(
     cfg: Optional[GlsConfig] = None, *, limit: int = 6, offset: int = 0
 ) -> list[MePlaylist]:
-    """OAuth → api.spotify.com, else go-librespot /web-api/ proxy."""
-    if (os.environ.get("GOLIBRESPOT_FORCE_LIBRESPOT_PLAYLISTS") or "").strip() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        _log.info(
-            "me/playlists: GOLIBRESPOT_FORCE_LIBRESPOT_PLAYLISTS — using daemon /web-api/ only"
-        )
-        return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
+    """Current user playlists from ``api.spotify.com`` (user OAuth only)."""
     if is_configured():
         _log.info("me/playlists: GET https://api.spotify.com/v1/me/playlists (OAuth)")
         try:
             return fetch_current_user_playlists(cfg, limit=limit, offset=offset)
         except Exception as e:
             _log.warning(
-                "me/playlists: Web API call failed (%s), falling back to go-librespot proxy", e
+                "me/playlists: Web API call failed (%s); returning no playlists", e
             )
-            return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
-    _log_spotify_oauth_missing_once(cfg)
-    return get_me_playlists_gls_proxy(cfg, limit=limit, offset=offset)
+            return []
+    _log_spotify_oauth_missing_once()
+    return []
 
 
 class SpotifyWebApiError(Exception):
