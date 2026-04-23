@@ -662,7 +662,47 @@ class _PlaylistArtHost(QWidget):
         hbox.addWidget(self._kind_icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         hbox.addWidget(self._text, 1, Qt.AlignmentFlag.AlignVCenter)
         self._cap_wrap.hide()
+        self._context_playing_active = False
         self.apply_empty()
+
+    def set_playing_context_active(self, active: bool) -> None:
+        """Thicker, brighter border when this tile’s context is the one currently playing."""
+        if active == getattr(self, "_context_playing_active", False):
+            return
+        self._context_playing_active = bool(active)
+        b = _btn
+        r = b(10)
+        if not self._context_playing_active:
+            self._btn.setStyleSheet("")
+            return
+        bw = b(4)
+        # Instance sheet overrides QToolButton#PlaylistTile from the main window for this button only.
+        self._btn.setStyleSheet(
+            f"""
+            QToolButton#PlaylistTile {{
+                background-color: #2a2218;
+                color: #f0e8d8;
+                border: {bw}px solid #d4a83c;
+                border-radius: {r}px;
+                padding: 0;
+                min-width: 0;
+                min-height: 0;
+            }}
+            QToolButton#PlaylistTile:hover:enabled {{
+                background-color: #3a3024;
+                border-color: #e8b850;
+                color: #fff8e8;
+            }}
+            QToolButton#PlaylistTile:pressed:enabled {{
+                background-color: #1e1810;
+            }}
+            QToolButton#PlaylistTile:disabled {{
+                color: #5a4a3a;
+                background-color: #1e1a16;
+                border-color: #3a3028;
+            }}
+            """
+        )
 
     def set_caption_font(self, font: QFont) -> None:
         self._text.setFont(font)
@@ -677,6 +717,7 @@ class _PlaylistArtHost(QWidget):
         self._raw_cover = None
         self._caption_full = ""
         self._context_kind = ""
+        self.set_playing_context_active(False)
         self._btn.setToolTip("")
         self._btn.setIcon(self._fallback_icon)
         self._btn.setEnabled(False)
@@ -825,6 +866,9 @@ class HistoryTile(QWidget):
         super().resizeEvent(event)
         self._host.refresh_art()
 
+    def set_context_playing_active(self, active: bool) -> None:
+        self._host.set_playing_context_active(active)
+
     def set_history_item(
         self,
         item: Optional[HistoryItem],
@@ -879,6 +923,8 @@ class MainWindow(QMainWindow):
         self._hud_fade: Optional[QPropertyAnimation] = None
         self._history = PlaybackHistory()
         self._last_context_uri: str = ""
+        # Active Spotify context (playlist / album / …) for highlighting a history tile; not cleared with history.
+        self._playing_context_uri: str = ""
         self._last_tr_for_history: Optional[dict[str, Any]] = None
         # repeat: 0=off, 1=one track, 2=whole context
         self._repeat_mode: int = 0
@@ -1393,6 +1439,7 @@ class MainWindow(QMainWindow):
         for i, tile in enumerate(self._history_tiles):
             pl = rows[i] if i < len(rows) else None
             tile.set_history_item(pl, self._history, self._playlist_tile_icon)
+        self._sync_playlist_playing_borders()
 
     def _wire_shortcuts(self) -> None:
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self._on_playpause)
@@ -1443,6 +1490,8 @@ class MainWindow(QMainWindow):
                 newc = cu.strip()
                 if newc != self._last_context_uri:
                     self._last_context_uri = newc
+                    self._playing_context_uri = newc
+                    QTimer.singleShot(0, self._sync_playlist_playing_borders)
                     if self._last_tr_for_history is not None:
                         self._record_track_history(self._last_tr_for_history)
         if et in ("playback_ready", "active"):
@@ -1476,6 +1525,7 @@ class MainWindow(QMainWindow):
                 self._sync_volume_display(val, mx, force_hud=False)
         elif et == "stopped":
             self._clear_track()
+            self._sync_playlist_playing_borders()
         elif et in ("shuffle_context", "repeat_context", "repeat_track") and isinstance(data, dict):
             v = data.get("value")
             if et == "shuffle_context" and isinstance(v, bool):
@@ -1563,10 +1613,21 @@ class MainWindow(QMainWindow):
             self._tick.stop()
 
         tr = st.get("track")
+        sctx = (st.get("context_uri") if isinstance(st.get("context_uri"), str) else "") or ""
+        sctx = sctx.strip()
         if isinstance(tr, dict):
+            tctx = (tr.get("context_uri") if isinstance(tr.get("context_uri"), str) else "") or ""
+            tctx = tctx.strip()
+            if tctx:
+                self._playing_context_uri = tctx
+            elif sctx:
+                self._playing_context_uri = sctx
+            else:
+                self._playing_context_uri = ""
             self._apply_track(tr)
         else:
             self._clear_track()
+        self._sync_playlist_playing_borders()
 
     def _apply_track(self, tr: dict[str, Any]) -> None:
         name = tr.get("name") or "—"
@@ -1594,6 +1655,7 @@ class MainWindow(QMainWindow):
     def _clear_track(self) -> None:
         self._last_tr_for_history = None
         self._is_paused = False
+        self._playing_context_uri = ""
         self.album_art.set_art_url(None)
         self.title_label.setText("No track")
         self.artist_label.setText("")
@@ -1609,6 +1671,23 @@ class MainWindow(QMainWindow):
     def _sync_pause_overlay(self) -> None:
         has_track = self.title_label.text() not in ("", "No track")
         self.album_art.set_pause_overlay_visible(self._is_paused and has_track)
+
+    def _sync_playlist_playing_borders(self) -> None:
+        """Wider border on the history tile that matches the current ``context_uri`` (when playing)."""
+        active = (self._playing_context_uri or "").strip()
+        rows: list[Optional[HistoryItem]] = list(self._history.items)
+        while len(rows) < _MAX_ENTRIES:
+            rows.append(None)
+        rows = rows[:_MAX_ENTRIES]
+        for i, tile in enumerate(self._history_tiles):
+            pl = rows[i] if i < len(rows) else None
+            if not active or pl is None:
+                tile.set_context_playing_active(False)
+                continue
+            pctx = (pl.context_uri or "").strip()
+            tile.set_context_playing_active(
+                pctx == active and pctx != ""
+            )
 
     def _set_progress(self, pos_ms: int, dur_ms: int) -> None:
         self._position_ms = max(0, pos_ms)
