@@ -442,13 +442,9 @@ class ArtworkFrameHost(QWidget):
 class VolumeOverlay(QFrame):
     """Fullscreen dim + centered macOS-style volume HUD (large level + bar)."""
 
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self._typo_family = "Corben"
-        self._typo_pct_design = 44.0
-        self._typo_sub_design = 14.0
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setObjectName("volumeOverlay")
+    def _apply_hud_stylesheet(self) -> None:
+        """Baked style + per-label font: main window's global ``QLabel`` QSS would otherwise win over ``setFont``."""
+        fam = qss_font_family(self._typo_family)
         self.setStyleSheet(
             f"""
             #volumeOverlay {{ background-color: rgba(20, 14, 10, 0.72); }}
@@ -457,7 +453,10 @@ class VolumeOverlay(QFrame):
                 border-radius: {_s(20)}px;
                 border: {_s(3)}px solid #9a7b4a;
             }}
-            QLabel#hudPercent {{ color: #f0e6d4; font-weight: 600; }}
+            QFrame#volumeHudCard QLabel {{
+                font-family: {fam};
+            }}
+            QLabel#hudPercent {{ color: #f0e6d4; font-weight: 600; font-family: {fam}; }}
             QProgressBar {{
                 border: 1px solid #5a4a38; border-radius: {_s(5)}px; background: #1a1410; height: {_s(14)}px;
             }}
@@ -465,7 +464,17 @@ class VolumeOverlay(QFrame):
                 stop:0 #a68428, stop:0.5 #d4a83c, stop:1 #8a6a20); border-radius: {_s(3)}px; }}
             """
         )
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._typo_family = "Corben"
+        self._typo_pct_design = 44.0
+        self._typo_sub_design = 14.0
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setObjectName("volumeOverlay")
+        self._apply_hud_stylesheet()
         self._icon = QLabel("🔊")
+        self._icon.setObjectName("hudIcon")
         ic = QFont()
         ic.setPointSize(_s(56))
         self._icon.setFont(ic)
@@ -484,10 +493,7 @@ class VolumeOverlay(QFrame):
         self._pct.setFont(pf)
         self._pct.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sub = QLabel("")
-        self._sub.setStyleSheet(
-            f"color: rgba(200, 185, 160, 0.75); font-size: {_s(14)}px; "
-            f"font-family: {qss_font_family(self._typo_family)};"
-        )
+        self._sub.setObjectName("hudSub")
         self._sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._card = QFrame()
@@ -516,6 +522,10 @@ class VolumeOverlay(QFrame):
         self.hide()
         for w in (self, *self.findChildren(QWidget)):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._sub.setStyleSheet(
+            f"color: rgba(200, 185, 160, 0.75); font-size: {_s(14)}px; "
+            f"font-family: {qss_font_family(self._typo_family)};"
+        )
 
     def configure_typography(
         self, *, family: str, pct_design: float, sub_design: float
@@ -523,6 +533,7 @@ class VolumeOverlay(QFrame):
         self._typo_family = (family or "Corben").strip() or "Corben"
         self._typo_pct_design = max(1.0, float(pct_design))
         self._typo_sub_design = max(1.0, float(sub_design))
+        self._apply_hud_stylesheet()
         pf = self._pct.font()
         pf.setFamily(self._typo_family)
         self._pct.setFont(pf)
@@ -548,6 +559,7 @@ class VolumeOverlay(QFrame):
         self._bar.setFixedHeight(max(_s(8), min(_s(16), d // 28)))
         icf = self._icon.font()
         icf.setPointSize(max(10, int(d * 0.1)))
+        icf.setFamily(self._typo_family)
         self._icon.setFont(icf)
         pf = self._pct.font()
         pf.setFamily(self._typo_family)
