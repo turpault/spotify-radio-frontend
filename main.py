@@ -28,6 +28,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 from PyQt6.QtCore import (
     QAbstractAnimation,
+    QEasingCurve,
     QPoint,
     QPropertyAnimation,
     QSize,
@@ -166,6 +167,20 @@ class AlbumArtLabel(QLabel):
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._nam = QNetworkAccessManager(self)
         self._active_reply: Optional[QNetworkReply] = None
+        # Cover pixmap on a child so we can fade it in without dimming the pause overlay.
+        self._pix_label = QLabel(self)
+        self._pix_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        self._pix_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pix_label.setStyleSheet("background: transparent; border: none;")
+        self._pix_label.hide()
+        self._art_opacity = QGraphicsOpacityEffect(self._pix_label)
+        self._pix_label.setGraphicsEffect(self._art_opacity)
+        self._art_opacity.setOpacity(1.0)
+        self._fade_in_anim = QPropertyAnimation(self._art_opacity, b"opacity", self)
+        self._fade_in_anim.setDuration(380)
+        self._fade_in_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._pause_visible = False
         self._pause_overlay = QLabel(self)
         self._pause_overlay.setObjectName("pauseOverlay")
@@ -215,7 +230,14 @@ class AlbumArtLabel(QLabel):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._pix_label.setGeometry(0, 0, self.width(), self.height())
         self._layout_pause_overlay()
+
+    def _reset_art_layer_for_placeholder(self) -> None:
+        self._fade_in_anim.stop()
+        self._art_opacity.setOpacity(1.0)
+        self._pix_label.clear()
+        self._pix_label.hide()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -231,6 +253,7 @@ class AlbumArtLabel(QLabel):
             old.abort()  # finished disposes the reply; do not deleteLater here
         if not url:
             self._raw_pix = None
+            self._reset_art_layer_for_placeholder()
             self.clear()
             self.setText("—")
             return
@@ -252,6 +275,7 @@ class AlbumArtLabel(QLabel):
             reply.deleteLater()
             self._active_reply = None
             self._raw_pix = None
+            self._reset_art_layer_for_placeholder()
             self.clear()
             self.setText("—")
             return
@@ -261,13 +285,14 @@ class AlbumArtLabel(QLabel):
         pix = QPixmap()
         if not pix.loadFromData(bytes(data)):
             self._raw_pix = None
+            self._reset_art_layer_for_placeholder()
             self.clear()
             self.setText("—")
             return
         self._raw_pix = pix
-        self._redraw_from_raw()
+        self._redraw_from_raw(fade_in=True)
 
-    def _redraw_from_raw(self) -> None:
+    def _redraw_from_raw(self, *, fade_in: bool = False) -> None:
         if self._raw_pix is None or self._raw_pix.isNull():
             return
         scaled = self._raw_pix.scaled(
@@ -276,7 +301,19 @@ class AlbumArtLabel(QLabel):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        self.setPixmap(scaled)
+        self.setText("")
+        self._pix_label.setPixmap(scaled)
+        self._pix_label.setGeometry(0, 0, self.width(), self.height())
+        self._pix_label.show()
+        if fade_in:
+            self._fade_in_anim.stop()
+            self._art_opacity.setOpacity(0.0)
+            self._fade_in_anim.setStartValue(0.0)
+            self._fade_in_anim.setEndValue(1.0)
+            self._fade_in_anim.start()
+        else:
+            self._art_opacity.setOpacity(1.0)
+        self._pause_overlay.raise_()
 
     def set_art_viewport(self, w: int, h: int) -> None:
         """Set fixed view port for the art (contain). Window-pixel bounds via UI scale."""
@@ -288,7 +325,7 @@ class AlbumArtLabel(QLabel):
         self._art_h = h
         self.setFixedSize(w, h)
         if self._raw_pix is not None and not self._raw_pix.isNull():
-            self._redraw_from_raw()
+            self._redraw_from_raw(fade_in=False)
         self._layout_pause_overlay()
         if self._pause_visible:
             self._pause_overlay.raise_()
