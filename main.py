@@ -951,6 +951,7 @@ class MainWindow(QMainWindow):
                 border: {b(2)}px solid rgba(220, 200, 170, 0.42);
                 border-radius: {b(10)}px;
                 padding: {b(2)}px {b(4)}px;
+                /* font is set on each instance via setStyleSheet so it wins over global QPushButton below */
             }}
             QPushButton#ArtTransportBtn:hover:enabled {{
                 background: rgba(255, 250, 240, 0.18);
@@ -1080,13 +1081,16 @@ class MainWindow(QMainWindow):
             ("seek_back_30", self.seek_back_30),
             ("seek_fwd_30", self.seek_fwd_30),
         ):
+            # Instance stylesheet must set font: global `QPushButton` QSS overrides setFont.
             _fs = self._ui_elements[_name]["font"]
-            _pf = QFont()
-            _pf.setFamily(_fs["family"])
-            _pf.setPointSize(_s(int(float(_fs.get("size", 18)))))
+            _fam = qss_font_family(_fs["family"])
+            _sz = _s(max(1, int(float(_fs.get("size", 18)))))
             _bld = _fs.get("bold")
-            _pf.setBold(_bld if isinstance(_bld, bool) else True)
-            _w.setFont(_pf)
+            _is_bold = _bld if isinstance(_bld, bool) else True
+            _wt = "bold" if _is_bold else "normal"
+            _w.setStyleSheet(
+                f"font-family: {_fam}; font-size: {_sz}px; font-weight: {_wt};"
+            )
         self.prev_btn.clicked.connect(self._on_prev)
         self.next_btn.clicked.connect(self._on_next)
         self.seek_back_30.clicked.connect(self._on_seek_back_30)
