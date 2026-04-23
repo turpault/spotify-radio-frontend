@@ -158,6 +158,7 @@ class AlbumArtLabel(QLabel):
         super().__init__()
         self._art_w = w
         self._art_h = h
+        self._art_border = _s(3)
         self._raw_pix: Optional[QPixmap] = None
         self._pause_typeface = ""
         self.setFixedSize(w, h)
@@ -199,8 +200,10 @@ class AlbumArtLabel(QLabel):
         self._pause_overlay.hide()
 
     def apply_placeholder_typography(self, family_qss: str, size_px: int) -> None:
+        # Kept in sync with _layout_pix_label inset so the cover does not paint over this border.
+        self._art_border = _s(3)
         self.setStyleSheet(
-            f"background-color: #1a1510; color: #5a5048; border: {_s(3)}px solid #8b7355; "
+            f"background-color: #1a1510; color: #5a5048; border: {self._art_border}px solid #8b7355; "
             f"border-radius: {_s(8)}px; font-size: {size_px}px; "
             f"font-family: {family_qss}, Palatino, 'Times New Roman', serif;"
         )
@@ -230,9 +233,16 @@ class AlbumArtLabel(QLabel):
             f.setStyleHint(QFont.StyleHint.SansSerif)
         self._pause_overlay.setFont(f)
 
+    def _layout_pix_label(self) -> None:
+        b = self._art_border
+        w, h = self.width(), self.height()
+        self._pix_label.setGeometry(
+            b, b, max(1, w - 2 * b), max(1, h - 2 * b)
+        )
+
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._pix_label.setGeometry(0, 0, self.width(), self.height())
+        self._layout_pix_label()
         self._layout_pause_overlay()
 
     def _reset_art_layer_for_placeholder(self) -> None:
@@ -311,15 +321,18 @@ class AlbumArtLabel(QLabel):
     def _redraw_from_raw(self, *, fade_in: bool = False) -> None:
         if self._raw_pix is None or self._raw_pix.isNull():
             return
+        b = self._art_border
+        iw = max(1, self._art_w - 2 * b)
+        ih = max(1, self._art_h - 2 * b)
         scaled = self._raw_pix.scaled(
-            self._art_w,
-            self._art_h,
+            iw,
+            ih,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         self.setText("")
         self._pix_label.setPixmap(scaled)
-        self._pix_label.setGeometry(0, 0, self.width(), self.height())
+        self._layout_pix_label()
         self._pix_label.show()
         if fade_in:
             self._fade_in_anim.stop()
