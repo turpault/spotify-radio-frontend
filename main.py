@@ -31,6 +31,7 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
     QPropertyAnimation,
+    QRectF,
     QSize,
     Qt,
     QTimer,
@@ -46,7 +47,9 @@ from PyQt6.QtGui import (
     QIcon,
     QKeySequence,
     QMouseEvent,
+    QPainterPath,
     QPixmap,
+    QRegion,
     QResizeEvent,
     QShortcut,
 )
@@ -159,6 +162,8 @@ class AlbumArtLabel(QLabel):
         self._art_w = w
         self._art_h = h
         self._art_border = _s(3)
+        self._art_outer_radius = _s(8)
+        self._art_inner_radius = max(0, self._art_outer_radius - self._art_border)
         self._raw_pix: Optional[QPixmap] = None
         self._pause_typeface = ""
         self.setFixedSize(w, h)
@@ -200,13 +205,17 @@ class AlbumArtLabel(QLabel):
         self._pause_overlay.hide()
 
     def apply_placeholder_typography(self, family_qss: str, size_px: int) -> None:
-        # Kept in sync with _layout_pix_label inset so the cover does not paint over this border.
+        # Kept in sync with _layout_pix_label inset and _update_pix_label_round_mask.
         self._art_border = _s(3)
+        self._art_outer_radius = _s(8)
+        self._art_inner_radius = max(0, self._art_outer_radius - self._art_border)
         self.setStyleSheet(
             f"background-color: #1a1510; color: #5a5048; border: {self._art_border}px solid #8b7355; "
-            f"border-radius: {_s(8)}px; font-size: {size_px}px; "
+            f"border-radius: {self._art_outer_radius}px; font-size: {size_px}px; "
             f"font-family: {family_qss}, Palatino, 'Times New Roman', serif;"
         )
+        if hasattr(self, "_pix_label"):
+            self._update_pix_label_round_mask()
 
     def set_pause_typeface(self, family: str) -> None:
         self._pause_typeface = (family or "").strip()
@@ -233,12 +242,25 @@ class AlbumArtLabel(QLabel):
             f.setStyleHint(QFont.StyleHint.SansSerif)
         self._pause_overlay.setFont(f)
 
+    def _update_pix_label_round_mask(self) -> None:
+        """Clip cover pixmap to the same inner corner radius as the QSS border frame."""
+        w, h = self._pix_label.width(), self._pix_label.height()
+        if w < 2 or h < 2:
+            self._pix_label.clearMask()
+            return
+        r = float(self._art_inner_radius)
+        r = min(r, w / 2.0, h / 2.0)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), r, r)
+        self._pix_label.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
     def _layout_pix_label(self) -> None:
         b = self._art_border
         w, h = self.width(), self.height()
         self._pix_label.setGeometry(
             b, b, max(1, w - 2 * b), max(1, h - 2 * b)
         )
+        self._update_pix_label_round_mask()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -249,6 +271,7 @@ class AlbumArtLabel(QLabel):
         self._fade_in_anim.stop()
         self._art_opacity.setOpacity(1.0)
         self._pix_label.clear()
+        self._pix_label.clearMask()
         self._pix_label.hide()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
